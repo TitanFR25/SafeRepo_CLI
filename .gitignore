@@ -1,0 +1,4 @@
+# Mettre à jour le fichier .gitignore pour ignorer les fichiers et dossiers suivants (projet open source):
+obj
+bin
+/target
