@@ -31,7 +31,7 @@
 
 ---
 
-## 🇬🇧 English Version (v0.2)
+## 🇬🇧 English Version (v0.3)
 
 **Goal:** Secure the scanning engine, implement smart filtering, and optimize performance.
 
