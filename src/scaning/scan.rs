@@ -1,6 +1,12 @@
 use std:: {fs, io::{self, Write}, path::{Path}, time::{ Instant, Duration}};
 use crate::secure::security::SecurityManager;
 
+
+// --- CONFIGURATION DE SÉCURITÉ ---
+// On monte à 2 Mo car on ne traite que les fichiers manifeste
+const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
+const MAX_DEPTH : usize = 40;
+
 // Liste de dossiers à ignorer pour les performances
 const IGNORED_DIRS: &[&str] = &[
     ".git",
@@ -28,6 +34,8 @@ struct ScanResult {
     dirs_count: u64, // Nombre total de dossiers trouvés
     issues_found: u64, // Nombre de failles de sécurité détectées
     ignored_count: u64, // Nombre d'éléments ignorés (ex: dossiers dans IGNORED_DIRS)
+    oversized_count: u64, // Fichiers dépassant 2 Mo
+    depth_limit_hit: u64, // Dossiers trop profonds
 }
 
 // Fonction principale de scan sécurisé
@@ -36,10 +44,17 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &SecurityManager) -> io:
     // 1.INITIALISATION
     // On crée une pile (stack) pour stocker les chemins à visiter.
     // On utilise un Vec (Heap) plutot que la récursion pour éviter de faire planter le programme (Stack Overflow).
-    let mut stack = vec![root_path.as_ref().to_path_buf()];
+    let mut stack = vec![(root_path.as_ref().to_path_buf(), 0)];
 
     // On initialise nos compteurs à zéro
-    let mut stats = ScanResult { files_count: 0, dirs_count: 0, issues_found: 0, ignored_count: 0 };
+    let mut stats = ScanResult { 
+        files_count: 0, 
+        dirs_count: 0, 
+        issues_found: 0, 
+        ignored_count: 0,
+        oversized_count: 0,
+        depth_limit_hit: 0 
+    };
 
     // Liste de caractères pour créer une animation de chargement (Spinner)
     let spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -52,7 +67,12 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &SecurityManager) -> io:
     println!("🚀 Saferepo : Démarrage du scan...");
 
     // 2. BOUCLE DE PARCOURS (Tant qu'il y a des dossiers dans la pile)
-    while let Some(current_path) = stack.pop() {
+    while let Some((current_path, depth)) = stack.pop() {
+        // On arrete si c'est trop profond pour éviter les attaques DoS
+        if depth > MAX_DEPTH {
+            stats.depth_limit_hit +=1;
+            continue;
+        }
 
         // On tente d'ouvrir le dossier actuel
         // match permet de gérer l'erreur si le dossier est protégé par le système
@@ -61,7 +81,7 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &SecurityManager) -> io:
             Err(_) => continue,
         };
 
-        // 3. PARCOURS DES ENTR2ES DU DOSSIER
+        // 3. PARCOURS DES ENTREES DU DOSSIER
         for entry in entries {
             // Si l'entrée est illisible (erreur systéme rare), on l'ignore
             let entry = match entry {
@@ -97,16 +117,22 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &SecurityManager) -> io:
             if meta.is_dir() {
                 stats.dirs_count += 1;
                 // On ajoute le chemin du dossier dans la pile pour qu'il soit scanné plus tard
-                stack.push(entry.path());
+                stack.push((entry.path(), depth + 1));
             }
             // CAS 2 : C'est un fichier
             else if meta.is_file() {
-                stats.files_count += 1;
-                
-                // --- ANALYSE DE SÉCURITÉ ---
-                // Le scanner délègue l'analyse au SecurityManager
-                stats.issues_found += manager.analyze_file(&entry.path());
+                // Limite de taille pour ne pas saturer la RAM
+                if meta.len() > MAX_FILE_SIZE {
+                    stats.oversized_count += 1;
+                    continue;
+                }
 
+                // On ne délègue au manager que si c'est un fichier qu'il connait
+                if is_manifest {
+                    stats.files_count += 1;
+                    stats.issues_found += manager
+                    .analyze_file(&entry.path());
+                }
 
                 // --- GESTION DE L'AFFICHAGE DYNAMIQUE (UX) ---
                 // S'affiche uniquement si supérieur ou égal à 100ms
@@ -115,9 +141,9 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &SecurityManager) -> io:
 
                     // On affiche l'état actuel sur une seule ligne
                     print!(
-                        "\r{} Scan en cours... [{} éléments analysés]",
+                        "\r{} Scan en cours... [{} manifeste analysés]",
                         spinner_frames[frame_idx],
-                        stats.files_count + stats.dirs_count
+                        stats.files_count
                     );
                     // Force l'affichage immédiat dans le terminal
                     io::stdout().flush()?;
@@ -133,22 +159,36 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &SecurityManager) -> io:
     // On efface la ligne du spinner pour un affichage propre
     print!("\r{: <60}\r", "");
 
-    // Le rapport final affiche les chiffres exacts, meme si le dernier tick de 100ms a été sauté
-    println!(
-        "✅ Scan terminé : {} fichiers et {} répertoires analysés.",
-        stats.files_count,
-        stats.dirs_count,
-    );
+    println!("✅ Scan terminé avec succès.");
+    println!("📊 Statistiques du projet :");
+    println!("   - Manifestes analysés : {}", stats.files_count);
+    println!("   - Répertoires parcourus : {}", stats.dirs_count);
 
-    if stats.ignored_count> 0 {
-        println!("ℹ️ {} dossiers volumineux ont été ignorés.", stats.ignored_count);
+    // Section des éléments ignorés (affichée uniquement si nécessaire)
+    if stats.ignored_count > 0 || stats.depth_limit_hit > 0 || stats.oversized_count > 0 {
+        println!("\nℹ️  Informations sur le filtrage :");
+        
+        // Affiche le nombre de dossiers exclus 
+        if stats.ignored_count > 0 {
+            println!("   - Dossiers exclus par défaut : {}", stats.ignored_count);
+        }
+
+        // Affiche si la limite de profondeur (40) a été atteinte
+        if stats.depth_limit_hit > 0 {
+            println!("   - Dossiers trop profonds (> {} niveaux) : {}", MAX_DEPTH, stats.depth_limit_hit);
+        }
+
+        // Affiche si des fichiers étaient trop gros pour être lus en toute sécurité
+        if stats.oversized_count > 0 {
+            println!("   - Fichiers ignorés car trop volumineux (> 2 Mo) : {}", stats.oversized_count);
+        }
     }
 
+    println!("\n--- RÉSULTAT DE SÉCURITÉ ---");
     if stats.issues_found > 0 {
-        println!("🚨 ATTENTION : {} Vulnérabilité(s) détectée(s) !", stats.issues_found);
+        println!("🚨 DANGER : {} vulnérabilité(s) détectée(s) dans vos dépendances !", stats.issues_found);
     } else {
-        println!("🛡️ Aucun problème détecté. Votre projet est sûr.");
+        println!("🛡️  Félicitations : Aucune vulnérabilité connue détectée.");
     }
-
     Ok(())
 }
