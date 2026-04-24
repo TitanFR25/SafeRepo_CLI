@@ -1,4 +1,5 @@
 use std:: {fs, io::{self, Write}, path::{Path}, time::{ Instant, Duration}};
+use crate::secure::security::SecurityManager;
 
 // Liste de dossiers à ignorer pour les performances
 const IGNORED_DIRS: &[&str] = &[
@@ -31,7 +32,7 @@ struct ScanResult {
 
 // Fonction principale de scan sécurisé
 // P: Asref<Path> permet d'accepter des String, &str ou des PathBuf en entrée
-pub fn read_safe_repo<P: AsRef<Path>>(root_path: P) -> io::Result<()> {
+pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &SecurityManager) -> io::Result<()> {
     // 1.INITIALISATION
     // On crée une pile (stack) pour stocker les chemins à visiter.
     // On utilise un Vec (Heap) plutot que la récursion pour éviter de faire planter le programme (Stack Overflow).
@@ -57,10 +58,7 @@ pub fn read_safe_repo<P: AsRef<Path>>(root_path: P) -> io::Result<()> {
         // match permet de gérer l'erreur si le dossier est protégé par le système
         let entries = match fs::read_dir(&current_path) {
             Ok(e) => e,
-            Err(_) => {
-                // Si on ne peut pas ouvrir, on passe au dossier suivant sans crash
-                continue;
-            }
+            Err(_) => continue,
         };
 
         // 3. PARCOURS DES ENTR2ES DU DOSSIER
@@ -104,6 +102,11 @@ pub fn read_safe_repo<P: AsRef<Path>>(root_path: P) -> io::Result<()> {
             // CAS 2 : C'est un fichier
             else if meta.is_file() {
                 stats.files_count += 1;
+                
+                // --- ANALYSE DE SÉCURITÉ ---
+                // Le scanner délègue l'analyse au SecurityManager
+                stats.issues_found += manager.analyze_file(&entry.path());
+
 
                 // --- GESTION DE L'AFFICHAGE DYNAMIQUE (UX) ---
                 // S'affiche uniquement si supérieur ou égal à 100ms
@@ -112,7 +115,7 @@ pub fn read_safe_repo<P: AsRef<Path>>(root_path: P) -> io::Result<()> {
 
                     // On affiche l'état actuel sur une seule ligne
                     print!(
-                        "\r{} Scan en cours... [{} éléments trouvés]",
+                        "\r{} Scan en cours... [{} éléments analysés]",
                         spinner_frames[frame_idx],
                         stats.files_count + stats.dirs_count
                     );
@@ -121,10 +124,7 @@ pub fn read_safe_repo<P: AsRef<Path>>(root_path: P) -> io::Result<()> {
 
                     // On réinitialise le chrono pour le prochain intervalle
                     last_update = Instant::now();
-                }
-
-                // FUTUR : Logique de détection de failles ici
-                
+                }  
             }
         }
     }
@@ -135,12 +135,20 @@ pub fn read_safe_repo<P: AsRef<Path>>(root_path: P) -> io::Result<()> {
 
     // Le rapport final affiche les chiffres exacts, meme si le dernier tick de 100ms a été sauté
     println!(
-        "✅ Scan terminé : {} fichiers et {} répertoires analysés.\n ({} dossiers volumineux ignorés pour la performance)\n
-        Aucun probléme détecté.",
+        "✅ Scan terminé : {} fichiers et {} répertoires analysés.",
         stats.files_count,
         stats.dirs_count,
-        stats.ignored_count
     );
+
+    if stats.ignored_count> 0 {
+        println!("ℹ️ {} dossiers volumineux ont été ignorés.", stats.ignored_count);
+    }
+
+    if stats.issues_found > 0 {
+        println!("🚨 ATTENTION : {} Vulnérabilité(s) détectée(s) !", stats.issues_found);
+    } else {
+        println!("🛡️ Aucun problème détecté. Votre projet est sûr.");
+    }
 
     Ok(())
 }
