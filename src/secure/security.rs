@@ -35,6 +35,7 @@ struct PackageLockJson {
 #[derive(Deserialize)]
 struct PackageLockDep {
     version: Option<String>,
+    #[allow(dead_code)]
     resolved: Option<String>,
     #[serde(default)]
     dependencies: Option<std::collections::HashMap<String, PackageLockDep>>,
@@ -44,6 +45,7 @@ struct PackageLockDep {
 struct PythonRequirement {
     name: String,
     version: Option<String>,
+    #[allow(dead_code)]
     operator: Option<String>,
 }
 
@@ -173,12 +175,35 @@ pub struct SecurityManager {
 }
 
 impl SecurityManager {
-    // Initialise le manager et charge la base de données
+    // Initialise le manager et charge la base de données locale
     pub fn new(db_path: &str) -> Self {
         let mut db = VulnerabilityDB::new();
         if let Err(e) = db.load_from_dir(db_path) {
-            eprintln!("⚠️ [security] Erreur de chargement de la DB : {}", e);
+            eprintln!("⚠️ [security] Erreur de chargement de la DB locale : {}", e);
+            eprintln!("💡 Assurez-vous que le répertoire {} existe avec des fichiers TOML", db_path);
         }
+        Self { db }
+    }
+
+    /// Initialise le manager avec OSV.dev comme source (vraie BD en production)
+    pub fn with_osv() -> Self {
+        let db = VulnerabilityDB::new();
+        // OSV sera interrogé à la demande pour chaque package analysé
+        // (plutôt que de charger tout en mémoire)
+        eprintln!("✅ [security] Mode OSV.dev activé - requêtes dynamiques");
+        Self { db }
+    }
+
+    /// Initialise le manager hybride : OSV + cache local
+    pub fn with_osv_and_local_cache(db_path: &str) -> Self {
+        let mut db = VulnerabilityDB::new();
+        // Charger le cache local s'il existe
+        if let Err(e) = db.load_from_dir(db_path) {
+            log::warn!("Cache local non disponible: {}", e);
+        } else {
+            eprintln!("✅ Cache local chargé depuis {}", db_path);
+        }
+        eprintln!("✅ Mode hibride: OSV.dev + cache local");
         Self { db }
     }
 

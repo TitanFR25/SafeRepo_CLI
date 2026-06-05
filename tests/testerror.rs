@@ -1,4 +1,4 @@
-// TESTS pour le systéme d'erreur
+// DESCRIPTION: Tests complets du système d'erreur
 #[cfg(test)]
 mod error_handling_tests {
     use SafeRepo_CLI::database::db::VulnerabilityDB;
@@ -6,7 +6,8 @@ mod error_handling_tests {
     use std::io;
     use std::path::Path;
 
-    // TEST 1: error display
+    // TEST 1: Affichage des erreurs I/O
+    // Objectif: Vérifier que les erreurs I/O sont affichées correctement avec emoji et contexte
     #[test]
     fn test_display_io_error() {
         let err = SafeRepoError::IoError {
@@ -18,7 +19,8 @@ mod error_handling_tests {
         assert!(message.contains("I/O"));
     }
 
-    // TEST 2: Security error
+    // TEST 2: Affichage des erreurs de sécurité
+    // Objectif: Vérifier que les erreurs de sécurité sont affichées avec emoji d'alerte
     #[test]
     fn test_display_security_error() {
         let err = SafeRepoError::SecurityError {
@@ -30,7 +32,8 @@ mod error_handling_tests {
         assert!(message.contains("Path Traversal"));
     }
 
-    // TEST 3 : Charger un dossier qui existe pas
+    // TEST 3: Chargement d'un répertoire inexistant
+    // Objectif: Vérifier que l'erreur est retournée gracieusement sans panic
     #[test]
     fn test_load_nonexistent_directory() {
         let mut db = VulnerabilityDB::new();
@@ -46,7 +49,8 @@ mod error_handling_tests {
         }
     }
 
-    // TEST 4 : Charger un fichier avec un toml invalide
+    // TEST 4: Chargement avec TOML invalide
+    // Objectif: Vérifier que les fichiers TOML malformés sont ignorés sans crash
     #[test]
     fn test_load_with_invalid_toml() {
         // Créer un fichier TOML invalide
@@ -68,7 +72,8 @@ mod error_handling_tests {
         }
     }
 
-    // TEST 5 : Vérifier l'integrité d'un fichier manquant
+    // TEST 5: Vérification d'intégrité sur fichier manquant
+    // Objectif: Vérifier que la vérification de hash échoue gracieusement sur fichier inexistant
     #[test]
     fn test_verify_integrity_on_missing_file() {
         let result =

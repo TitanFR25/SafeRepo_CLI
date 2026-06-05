@@ -2,6 +2,8 @@
 
 ### ⚡ Shortcuts / Raccourcis
 
+- [🇫🇷 Version Française (v0.6.5)](#-version-française-v065)
+- [🇬🇧 English Version (v0.6.5)](#-english-version-v065)
 - [🇫🇷 Version Française (v0.6.0)](#-version-française-v060)
 - [🇬🇧 English Version (v0.6.0)](#-english-version-v060)
 - [🇫🇷 Version Française (v0.5.5)](#-version-française-v055)
@@ -10,6 +12,106 @@
 - [🇬🇧 English Version (v0.5)](#-english-version-v05)
 - [🇫🇷 Version Française (v0.3)](#-version-française-v03)
 - [🇬🇧 English Version (v0.3)](#-english-version-v03)
+
+---
+
+## 🇫🇷 Version Française (v0.6.5)
+
+**Objectif :** Professionnaliser l'interface CLI et améliorer l'expérience développeur avec logging avancé, configuration centralisée et outputs structurés pour intégration CI/CD.
+
+### 🎯 CLI & Interface (✅ COMPLÈTE)
+
+⚠️ **Note :** CLI en version test - Stabilisation en cours pour v0.7.0
+
+- **CLI avec Clap :** Structure professionnelle avec sous-commandes organisées.
+  - `saferepo scan <path>` → Scanner un projet complet
+  - `saferepo check <file>` → Vérifier un seul fichier manifeste
+  - `saferepo update` → Mettre à jour la base de données des vulnérabilités
+  - `--help` et `--version` fonctionnels et détaillés
+  - Support des flags globaux (`--verbose`, `--config`, etc.)
+
+### 📝 Logging & Output (✅ COMPLET)
+
+- **Logging Structuré :** Intégration crate `log` + `env_logger`
+  - Fichier log avec rotation (optionnel)
+  - Console avec niveaux (DEBUG, INFO, WARN, ERROR)
+  - Format standardisé avec timestamp et module
+  - Contrôle via variable d'environnement `RUST_LOG`
+
+- **Output JSON :** Format structuré pour intégration CI/CD
+  - Export résultats en JSON valide
+  - Compatible outils externes (parsers, webhooks)
+  - Structure détaillée : vulnerabilities, statistics, metadata
+
+### ⚙️ Configuration (✅ COMPLET)
+
+- **Configuration System :** Fichier `.saferepo.toml` centralisé
+  - `ignore_patterns` → Chemins à ignorer lors du scan
+  - `min_severity` → Niveau minimum de sévérité (low, medium, high, critical)
+  - `exclude_code_scan` → Scan dépendances uniquement
+  - Merge stratégies (CLI flags > config file > defaults)
+  - Validation complète à la lecture
+
+### 📊 Changements par rapport à v0.6.0
+
+| Feature                    | v0.6.0 | v0.6.5              | Statut  |
+| -------------------------- | ------ | ------------------- | ------- |
+| CLI avec Clap              | ❌     | ✅                  | NOUVEAU |
+| Logging Structuré          | ❌     | ✅ (log+env_log)    | NOUVEAU |
+| Output JSON                | ❌     | ✅                  | NOUVEAU |
+| Configuration System       | ❌     | ✅ (.saferepo.toml) | NOUVEAU |
+| Sub-commandes (scan/check) | ❌     | ✅                  | NOUVEAU |
+| Intégration CI/CD ready    | ❌     | ✅                  | NOUVEAU |
+
+---
+
+## 🇬🇧 English Version (v0.6.5)
+
+**Goal:** Professionalize CLI interface and improve developer experience with advanced logging, centralized configuration, and structured outputs for CI/CD integration.
+
+### 🎯 CLI & Interface (✅ COMPLETE)
+
+⚠️ **Note:** CLI under testing - Stabilization in progress for v0.7.0
+
+- **CLI with Clap :** Professional structure with organized sub-commands.
+  - `saferepo scan <path>` → Scan a complete project
+  - `saferepo check <file>` → Verify a single manifest file
+  - `saferepo update` → Update the vulnerability database
+  - `--help` and `--version` functional and detailed
+  - Support for global flags (`--verbose`, `--config`, etc.)
+
+### 📝 Logging & Output (✅ COMPLETE)
+
+- **Structured Logging :** Integration of `log` crate + `env_logger`
+  - Log file with rotation (optional)
+  - Console with levels (DEBUG, INFO, WARN, ERROR)
+  - Standardized format with timestamp and module
+  - Control via `RUST_LOG` environment variable
+
+- **JSON Output :** Structured format for CI/CD integration
+  - Export results in valid JSON
+  - Compatible with external tools (parsers, webhooks)
+  - Detailed structure: vulnerabilities, statistics, metadata
+
+### ⚙️ Configuration (✅ COMPLETE)
+
+- **Configuration System :** Centralized `.saferepo.toml` file
+  - `ignore_patterns` → Paths to ignore during scan
+  - `min_severity` → Minimum severity level (low, medium, high, critical)
+  - `exclude_code_scan` → Dependency scanning only
+  - Merge strategies (CLI flags > config file > defaults)
+  - Full validation on read
+
+### 📊 Changes vs v0.6.0
+
+| Feature                   | v0.6.0 | v0.6.5              | Status |
+| ------------------------- | ------ | ------------------- | ------ |
+| CLI with Clap             | ❌     | ✅                  | NEW    |
+| Structured Logging        | ❌     | ✅ (log+env_log)    | NEW    |
+| JSON Output               | ❌     | ✅                  | NEW    |
+| Configuration System      | ❌     | ✅ (.saferepo.toml) | NEW    |
+| Sub-commands (scan/check) | ❌     | ✅                  | NEW    |
+| CI/CD Ready Integration   | ❌     | ✅                  | NEW    |
 
 ---
 
@@ -227,5 +329,5 @@
 
 ---
 
-**Dernière mise à jour** : 8 Mai 2026 ✨ (v0.6.0 Added)  
-**Last Updated**: May 8, 2026 ✨ (v0.6.0 Added)
+**Dernière mise à jour** : 5 Juin 2026 ✨ (v0.6.5 Added)  
+**Last Updated**: June 5, 2026 ✨ (v0.6.5 Added)

@@ -1,0 +1,55 @@
+# Configuration SafeRepo
+
+# Sévérité minimale pour les alertes
+min_severity = "high"
+
+# Patterns à ignorer lors du scan
+ignore_patterns = [
+    "node_modules",
+    "target",
+    ".git",
+    ".cache",
+    "build",
+    "dist",
+    ".venv",
+    "venv",
+]
+
+# Fichiers manifeste à scanner
+manifest_files = [
+    "Cargo.lock",
+    "Cargo.toml",
+    "package.json",
+    "package-lock.json",
+    "requirements.txt",
+    "go.mod",
+    "composer.lock",
+    "Gemfile.lock",
+]
+
+# Chemins personnalisés à exclure
+exclude_paths = [
+    "vendor",
+    "third_party",
+]
+
+# Limite de profondeur de récursion
+max_depth = 40
+
+# Taille maximale des fichiers (en bytes)
+max_file_size = 2097152  # 2 MB
+
+# Nombre de threads pour scan parallèle
+threads = 8
+
+# Mode verbeux
+verbose = false
+
+# Format de sortie (text, json, html, csv)
+output_format = "text"
+
+# Vérifier les signatures GPG
+verify_signatures = false
+
+# Chemin de la base de données
+db_path = "vulnera_db"
