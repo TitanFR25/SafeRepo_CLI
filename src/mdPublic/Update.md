@@ -2,10 +2,10 @@
 
 ### ⚡ Shortcuts / Raccourcis
 
-- [🇫🇷 Version Française (v0.6.5)](#-version-française-v065)
-- [🇬🇧 English Version (v0.6.5)](#-english-version-v065)
 - [🇫🇷 Version Française (v0.6.51)](#-version-française-v0651)
 - [🇬🇧 English Version (v0.6.51)](#-english-version-v0651)
+- [🇫🇷 Version Française (v0.6.5)](#-version-française-v065)
+- [🇬🇧 English Version (v0.6.5)](#-english-version-v065)
 - [🇫🇷 Version Française (v0.6.0)](#-version-française-v060)
 - [🇬🇧 English Version (v0.6.0)](#-english-version-v060)
 - [🇫🇷 Version Française (v0.5.5)](#-version-française-v055)
