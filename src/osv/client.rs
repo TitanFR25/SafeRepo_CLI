@@ -2,7 +2,7 @@
 // Permet de rechercher des vulnérabilités par package name et version
 
 use serde::{Deserialize, Serialize};
-use crate::errorhandle::errors::SafeRepoResult;
+use crate::errorhandle::SafeRepoResult;
 use crate::database::db::{Advisory, Severity, Versions};
 
 const _OSV_API_URL: &str = "https://api.osv.dev/v1/query";

@@ -4,17 +4,23 @@
 // Importer depuis la bibliothèque
 use SafeRepo_CLI::scaning::scan;
 use SafeRepo_CLI::secure::security::SecurityManager;
+use std::process;
 
-// Point d'entrée du programme avec gestion des erreurs lors de la lecture du dossier dans lequel le programme est exécuté
+// Point d'entrée du programme avec gestion des erreurs cohérente et lisible
 fn main() {
     let start_path = ".";
     let mut manager = SecurityManager::new("vulnera_db");
-    // Appeler la fonction pour lire le dossier Actuel et gérer les erreurs de manière appropriée
+    
+    // Exécuter le scan et gérer les erreurs de manière professionnelle
     match scan::scan_repo(start_path, &mut manager) {
-        Ok(()) => println!("\n[Succès] L'arborescence à été scannée avec succès."),
-        Err(e) => eprint!(
-            "\n[Erreur] Une erreur est survenue lors de la lecture du dossier. Détails: {}",
-            e
-        ),
+        Ok(()) => {
+            println!("\n✅ [Succès] L'arborescence a été scannée avec succès.");
+            process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("\n❌ Erreur lors du scan: {}", e);
+            eprintln!("💡 Conseil: Vérifiez les permissions et les chemins d'accès.");
+            process::exit(1);
+        }
     }
 }

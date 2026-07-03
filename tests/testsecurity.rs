@@ -302,4 +302,56 @@ require (
 
         assert!(result.is_ok(), "Doit parser go.mod valide");
     }
+
+    // TEST 4: Parser un package.json valide
+    #[test]
+    fn test_parse_package_json_valide() {
+        use std::fs;
+        let temp_dir = TempDir::new().expect("répertoire temp");
+        let package_json = temp_dir.path().join("package.json");
+
+        let content = r#"{
+            "name": "myapp",
+            "version": "1.0.0",
+            "dependencies": {
+                "express": "4.18.2",
+                "lodash": "4.17.21"
+            },
+            "devDependencies": {
+                "mocha": "9.1.3"
+            }
+        }"#;
+
+        fs::write(&package_json, content).expect("écrire package.json");
+
+        let mut manager = SecurityManager::new("vulnera_db");
+        let result = manager.analyze_file(&package_json);
+
+        assert!(result.is_ok(), "Doit parser package.json valide");
+    }
+
+    // TEST 5: Parser un package.json avec version invalide (ne doit pas panic)
+    #[test]
+    fn test_parse_package_json_invalid_version() {
+        use std::fs;
+        let temp_dir = TempDir::new().expect("répertoire temp");
+        let package_json = temp_dir.path().join("package.json");
+
+        let content = r#"{
+            "name": "broken",
+            "version": "0.1.0",
+            "dependencies": {
+                "weird": "not.a.version"
+            }
+        }"#;
+
+        fs::write(&package_json, content).expect("écrire package.json");
+
+        let mut manager = SecurityManager::new("vulnera_db");
+        let result = manager.analyze_file(&package_json);
+
+        assert!(result.is_ok(), "Le parser doit gérer les versions invalides sans panic");
+        let issues = result.unwrap_or_default();
+        assert_eq!(issues.len(), 0, "Aucune vulnérabilité attendue pour version invalide");
+    }
 }

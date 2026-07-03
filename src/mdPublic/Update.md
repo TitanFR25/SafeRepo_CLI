@@ -4,6 +4,8 @@
 
 - [🇫🇷 Version Française (v0.6.5)](#-version-française-v065)
 - [🇬🇧 English Version (v0.6.5)](#-english-version-v065)
+- [🇫🇷 Version Française (v0.6.51)](#-version-française-v0651)
+- [🇬🇧 English Version (v0.6.51)](#-english-version-v0651)
 - [🇫🇷 Version Française (v0.6.0)](#-version-française-v060)
 - [🇬🇧 English Version (v0.6.0)](#-english-version-v060)
 - [🇫🇷 Version Française (v0.5.5)](#-version-française-v055)
@@ -12,6 +14,34 @@
 - [🇬🇧 English Version (v0.5)](#-english-version-v05)
 - [🇫🇷 Version Française (v0.3)](#-version-française-v03)
 - [🇬🇧 English Version (v0.3)](#-english-version-v03)
+
+---
+
+## 🇫🇷 Version Française (v0.6.51)
+
+**Objectif :** Stabiliser les correctifs mineurs, renforcer le parsing des manifests et améliorer l'expérience CLI.
+
+### 🎯 Correctifs & Améliorations
+
+- **Gestion d'erreurs améliorée :** Messages utilisateurs explicites, mapping d'exit-codes, suppression des `panic!` et conversions d'erreurs centralisées.
+- **Parsers :** Implémentation du parseur `package.json` et renforcement du traitement de `Cargo.toml` (acceptation des versions courtes et normalisation SemVer).
+- **UX CLI :** Ajout d'un spinner / barre de progression pour les scans longs, sorties colorées en console (`colored`) et rapport final enrichi (stats détaillées).
+- **Tests :** Ajout et intégration de tests unitaires et d'intégration pour les parseurs et le moteur de scan; la suite de tests passe localement.
+- **CI & Performance :** Pipeline GitHub Actions activé (build + tests) et optimisations ciblées du scanner (filtrage de manifestes, limites de taille/profondeur).
+
+---
+
+## 🇬🇧 English Version (v0.6.51)
+
+**Goal:** Stabilize minor fixes, harden manifest parsing and improve CLI UX.
+
+### 🎯 Fixes & Improvements
+
+- **Improved error handling:** clearer user-facing messages, exit-code mapping, zero panics and centralized error conversions.
+- **Parsers:** implemented `package.json` parser and strengthened `Cargo.toml` handling (accept short versions and SemVer normalization).
+- **CLI UX:** added spinner/progress indicator, colored terminal output (`colored` crate) and an enriched final statistics report.
+- **Tests:** added unit and integration tests for parsers and the scanning engine; test suite runs successfully locally.
+- **CI & Performance:** GitHub Actions pipeline (build + tests) enabled and targeted scanner optimizations (manifest filtering, size/depth limits).
 
 ---
 
@@ -329,5 +359,5 @@
 
 ---
 
-**Dernière mise à jour** : 5 Juin 2026 ✨ (v0.6.5 Added)  
-**Last Updated**: June 5, 2026 ✨ (v0.6.5 Added)
+**Dernière mise à jour** : 3 Juillet 2026 ✨ (v0.6.5.1 Added)  
+**Last Updated**: July 3, 2026 ✨ (v0.6.5.1 Added)

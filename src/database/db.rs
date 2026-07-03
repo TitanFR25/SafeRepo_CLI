@@ -1,4 +1,4 @@
-use crate::errorhandle::errors::{SafeRepoError, SafeRepoResult};
+use crate::errorhandle::{SafeRepoError, SafeRepoResult};
 use semver::{Version, VersionReq};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -95,9 +95,9 @@ impl VulnerabilityDB {
     // Retourne le hash en format hexadecimal
     pub fn calculate_file_hash(file_path: &Path) -> SafeRepoResult<String> {
         // Lire le fichier avec gestion d'erreur
-        let data = fs::read(file_path).map_err(|e| SafeRepoError::IoError {
-            context: format!("reading file for hash: {}", file_path.display()),
-            source: e,
+        let data = fs::read(file_path).map_err(|e| SafeRepoError::ScanError {
+            file_path: file_path.display().to_string(),
+            reason: format!("Failed to read file for hashing: {}", e),
         })?;
 
         // Créer le hasher
@@ -250,9 +250,9 @@ impl VulnerabilityDB {
             });
         }
 
-        let entries = fs::read_dir(db_path).map_err(|e| SafeRepoError::IoError {
-            context: format!("reading database directory: {}", db_path.display()),
-            source: e,
+        let entries = fs::read_dir(db_path).map_err(|e| SafeRepoError::DatabaseError {
+            operation: "reading database directory".to_string(),
+            reason: format!("{}: {}", db_path.display(), e),
         })?;
         let mut integrity_hashes = Vec::new(); // Stocker les hash
         let mut error_count = 0; // Compteur d'erreurs

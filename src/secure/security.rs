@@ -264,11 +264,108 @@ impl SecurityManager {
                     })
                 }
             }
+            "toml" => {
+                if file_path.file_name().unwrap_or_default() == "Cargo.toml" {
+                    self.process_cargo_toml(file_path)
+                } else {
+                    Err(SafeRepoError::ValidationError {
+                        file_path: file_path.display().to_string(),
+                        reason: format!("Fichier TOML inconnu: {}", file_path.display()),
+                    })
+                }
+            }
             _ => Err(SafeRepoError::ValidationError {
                 file_path: file_path.display().to_string(),
                 reason: format!("Type de fichier non supporté: {}", extension),
             })
         }
+    }
+
+    /// Parser Cargo.toml - extraire les dépendances et vérifier les versions
+    fn process_cargo_toml(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
+        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
+            context: format!("reading Cargo.toml: {}", file_path.display()),
+            source: e,
+        })?;
+
+        if content.trim().is_empty() {
+            return Err(SafeRepoError::ValidationError {
+                file_path: file_path.display().to_string(),
+                reason: "Cargo.toml est vide".to_string(),
+            });
+        }
+
+        let value = toml::from_str::<toml::Value>(&content).map_err(|e| SafeRepoError::TomlError {
+            context: format!("parsing Cargo.toml: {}", file_path.display()),
+            source: e,
+        })?;
+
+        let mut vulnerabilities = Vec::new();
+
+        // Rechercher les tables [dependencies] et [dev-dependencies]
+        if let Some(deps) = value.get("dependencies") {
+            if let Some(table) = deps.as_table() {
+                for (name, val) in table.iter() {
+                    // val peut être une table (avec version, path, etc.) ou une string
+                    let version_opt = if val.is_str() {
+                        val.as_str().map(|s| s.to_string())
+                    } else if val.is_table() {
+                        val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
+                    } else {
+                        None
+                    };
+
+                    if let Some(ver) = version_opt {
+                        // Nettoyer les contraintes courantes (ex: ^1.2.3 -> 1.2.3)
+                        let cleaned = ver.trim();
+                        // Normaliser si nécessaire
+                        let candidate = if let Ok(_) = semver::Version::parse(cleaned) {
+                            cleaned.to_string()
+                        } else {
+                            self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
+                        };
+                        if let Ok(version) = semver::Version::parse(&candidate) {
+                            let found = self.db.check_vulnerability(name, &version);
+                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                        } else {
+                            eprintln!("⚠️ [Cargo.toml] Version non parsable pour {}: {}", name, ver);
+                        }
+                    } else {
+                        // Pas de version spécifiée - ignorer mais log
+                        eprintln!("ℹ️ [Cargo.toml] Pas de version pour {} - ignoré", name);
+                    }
+                }
+            }
+        }
+
+        if let Some(dev_deps) = value.get("dev-dependencies") {
+            if let Some(table) = dev_deps.as_table() {
+                for (name, val) in table.iter() {
+                    let version_opt = if val.is_str() {
+                        val.as_str().map(|s| s.to_string())
+                    } else if val.is_table() {
+                        val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
+                    } else {
+                        None
+                    };
+
+                    if let Some(ver) = version_opt {
+                        let cleaned = ver.trim();
+                        let candidate = if let Ok(_) = semver::Version::parse(cleaned) {
+                            cleaned.to_string()
+                        } else {
+                            self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
+                        };
+                        if let Ok(version) = semver::Version::parse(&candidate) {
+                            let found = self.db.check_vulnerability(name, &version);
+                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(vulnerabilities)
     }
 
     // Parser package-lock.json - Parser les dépendances Node.js/NPM
@@ -435,8 +532,76 @@ impl SecurityManager {
 
     /// Parser package.json - retourner Result
     fn process_package_json(&mut self, _file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
-        // TODO: Implémentation du parsing package.json
-        Ok(Vec::new())
+        let file_path = _file_path;
+        // 1. Lire le fichier
+        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
+            context: format!("reading package.json: {}", file_path.display()),
+            source: e,
+        })?;
+
+        if content.trim().is_empty() {
+            return Err(SafeRepoError::ValidationError {
+                file_path: file_path.display().to_string(),
+                reason: "package.json is empty".to_string(),
+            });
+        }
+
+        // 2. Parser JSON
+        let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| SafeRepoError::ValidationError {
+            file_path: file_path.display().to_string(),
+            reason: format!("Invalid JSON in package.json: {}", e),
+        })?;
+
+        let mut vulnerabilities = Vec::new();
+
+        // Helper to process a dependency map
+        let mut process_deps = |map: &serde_json::Map<String, serde_json::Value>| -> SafeRepoResult<()> {
+            for (name, val) in map.iter() {
+                // val peut être une string ou un objet
+                let version_opt = if val.is_string() {
+                    val.as_str().map(|s| s.to_string())
+                } else if val.is_object() {
+                    val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
+                } else {
+                    None
+                };
+
+                if let Some(ver) = version_opt {
+                    let cleaned = ver.trim();
+                    let candidate = if let Ok(_) = semver::Version::parse(cleaned) {
+                        cleaned.to_string()
+                    } else {
+                        self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
+                    };
+
+                    if let Ok(version) = semver::Version::parse(&candidate) {
+                        let found = self.db.check_vulnerability(name, &version);
+                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                    } else {
+                        eprintln!("⚠️ [package.json] Version non parsable pour {}: {}", name, ver);
+                    }
+                } else {
+                    eprintln!("ℹ️ [package.json] Pas de version pour {} - ignoré", name);
+                }
+            }
+            Ok(())
+        };
+
+        // dependencies
+        if let Some(deps) = v.get("dependencies") {
+            if let Some(obj) = deps.as_object() {
+                process_deps(obj)?;
+            }
+        }
+
+        // devDependencies
+        if let Some(dev) = v.get("devDependencies") {
+            if let Some(obj) = dev.as_object() {
+                process_deps(obj)?;
+            }
+        }
+
+        Ok(vulnerabilities)
     }
 
     /// Parser requirements.txt - Parser les dépendances Python/PIP
@@ -546,6 +711,28 @@ impl SecurityManager {
         } else {
             Some(normalized)
         }
+    }
+
+    /// Tente de normaliser une chaîne de version simple en semver x.y.z
+    /// Ex: "1" -> "1.0.0", "1.2" -> "1.2.0"
+    fn normalize_semver(&self, version_str: &str) -> Option<String> {
+        let mut s = version_str.trim().to_string();
+        // retirer operators courants
+        s = s.trim_start_matches('^').trim_start_matches('~').to_string();
+        // retirer espaces
+        s = s.trim().to_string();
+
+        // If already has 2 dots, return
+        if s.matches('.').count() >= 2 {
+            return Some(s);
+        }
+
+        // Append .0 until we have 3 parts
+        while s.matches('.').count() < 2 {
+            s.push_str(".0");
+        }
+
+        Some(s)
     }
 
     /// Parser go.mod - Parser les dépendances Go modules
