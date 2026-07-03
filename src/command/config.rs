@@ -241,7 +241,7 @@ impl SafeRepoConfig {
     /// Valide la configuration
     pub fn validate(&self) -> SafeRepoResult<()> {
         // Vérifier que la sévérité est valide
-        let valid_severities = vec!["critical", "high", "medium", "low"];
+        let valid_severities = ["critical", "high", "medium", "low"];
         if !valid_severities.contains(&self.min_severity.as_str()) {
             return Err(SafeRepoError::ConfigError {
                 key: "min_severity".to_string(),
@@ -267,7 +267,7 @@ impl SafeRepoConfig {
         }
 
         // Vérifier output_format
-        let valid_formats = vec!["text", "json", "html", "csv"];
+        let valid_formats = ["text", "json", "html", "csv"];
         if !valid_formats.contains(&self.output_format.as_str()) {
             return Err(SafeRepoError::ConfigError {
                 key: "output_format".to_string(),

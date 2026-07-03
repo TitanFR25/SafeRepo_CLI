@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use std::hint::black_box;
 use std::path::Path;
 use tempfile::TempDir;
 
@@ -446,10 +447,7 @@ fn bench_throughput(c: &mut Criterion) {
         // Collecte la liste de tous les fichiers créés
         let file_list: Vec<_> = std::fs::read_dir(temp_dir.path())
             .ok()
-            .and_then(|entries| {
-                // Crée un vecteur avec les chemins de tous les fichiers
-                Some(entries.flatten().map(|e| e.path()).collect())
-            })
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
             .unwrap_or_default();
 
         // Lance le benchmark

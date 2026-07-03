@@ -538,19 +538,16 @@ impl Cli {
         }
 
         // Vérifier si update nécessaire
-        if !force {
-            if let Ok(metadata) = fs::metadata("vulnera_db/osv_last_update.txt") {
-                if let Ok(modified) = metadata.modified() {
-                    if let Ok(elapsed) = modified.elapsed() {
-                        if elapsed.as_secs() < 86400 {
-                            // Moins de 24h
-                            println!("📦 Base de données à jour (mise à jour il y a {} heures)", 
-                                elapsed.as_secs() / 3600);
-                            return Ok(());
-                        }
-                    }
-                }
-            }
+        if !force
+            && let Ok(metadata) = fs::metadata("vulnera_db/osv_last_update.txt")
+            && let Ok(modified) = metadata.modified()
+            && let Ok(elapsed) = modified.elapsed()
+            && elapsed.as_secs() < 86400
+        {
+            // Moins de 24h
+            println!("📦 Base de données à jour (mise à jour il y a {} heures)", 
+                elapsed.as_secs() / 3600);
+            return Ok(());
         }
 
         if verbose {
@@ -590,18 +587,15 @@ impl Cli {
             println!("   [1/3] Vérification des versions...");
         }
 
-        if !force {
-            if let Ok(metadata) = fs::metadata("vulnera_db/github_last_update.txt") {
-                if let Ok(modified) = metadata.modified() {
-                    if let Ok(elapsed) = modified.elapsed() {
-                        if elapsed.as_secs() < 86400 {
-                            println!("📦 Base de données à jour (mise à jour il y a {} heures)", 
-                                elapsed.as_secs() / 3600);
-                            return Ok(());
-                        }
-                    }
-                }
-            }
+        if !force
+            && let Ok(metadata) = fs::metadata("vulnera_db/github_last_update.txt")
+            && let Ok(modified) = metadata.modified()
+            && let Ok(elapsed) = modified.elapsed()
+            && elapsed.as_secs() < 86400
+        {
+            println!("📦 Base de données à jour (mise à jour il y a {} heures)", 
+                elapsed.as_secs() / 3600);
+            return Ok(());
         }
 
         if verbose {
@@ -647,7 +641,7 @@ impl Cli {
             println!("==========================\n");
 
             // Afficher les chemins standard
-            let standard_paths = vec![
+            let standard_paths = [
                 PathBuf::from(".saferepo.toml"),
                 PathBuf::from(".config/saferepo.toml"),
                 SafeRepoConfig::get_config_dir()?.join("saferepo.toml"),

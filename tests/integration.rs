@@ -261,9 +261,8 @@ mod tests_integration {
             integrity_check.is_ok(),
             "La vérification d'intégrité initiale doit réussir"
         );
-        assert_eq!(
+        assert!(
             integrity_check.unwrap(),
-            true,
             "L'intégrité doit être confirmée pour une DB non modifiée"
         );
 
@@ -294,19 +293,17 @@ mod tests_integration {
         );
 
         // Comparer les hashes avec le log d'audit précédent
-        if let Some(original_audit) = &db.integrity_log {
-            if let Some(modified_audit) = &db_modified.integrity_log {
-                let hashes_changed = original_audit
-                    .advisories
-                    .iter()
-                    .zip(modified_audit.advisories.iter())
-                    .any(|(orig, modified)| orig.sha256_hash != modified.sha256_hash);
+        if let Some(original_audit) = &db.integrity_log && let Some(modified_audit) = &db_modified.integrity_log {
+            let hashes_changed = original_audit
+                .advisories
+                .iter()
+                .zip(modified_audit.advisories.iter())
+                .any(|(orig, modified)| orig.sha256_hash != modified.sha256_hash);
 
-                assert!(
-                    hashes_changed,
-                    "Au moins un hash de fichier doit avoir changé après modification"
-                );
-            }
+            assert!(
+                hashes_changed,
+                "Au moins un hash de fichier doit avoir changé après modification"
+            );
         }
 
         println!("✅ Test d'intégrité DB réussi: modification détectée correctement");

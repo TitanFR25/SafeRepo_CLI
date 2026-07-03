@@ -32,7 +32,7 @@ mod test_security_manager {
         // Le manager doit être créé sans erreur
         // (On ne peut pas vraiment vérifier l'état interne, mais on s'assure que le constructeur ne panic pas)
         assert!(
-            manager.db.advisories.len() > 0,
+            !manager.db.advisories.is_empty(),
             "La DB ne devrait pas être vide"
         );
     }

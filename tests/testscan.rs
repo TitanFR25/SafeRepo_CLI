@@ -220,6 +220,7 @@ mod tests_scan_repo {
         let mut perms = fs::metadata(&protected_file)
             .expect("Impossible de relire les métadonnées")
             .permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         fs::set_permissions(&protected_file, perms)
             .expect("Impossible de restaurer les permissions");

@@ -303,63 +303,59 @@ impl SecurityManager {
         let mut vulnerabilities = Vec::new();
 
         // Rechercher les tables [dependencies] et [dev-dependencies]
-        if let Some(deps) = value.get("dependencies") {
-            if let Some(table) = deps.as_table() {
-                for (name, val) in table.iter() {
-                    // val peut être une table (avec version, path, etc.) ou une string
-                    let version_opt = if val.is_str() {
-                        val.as_str().map(|s| s.to_string())
-                    } else if val.is_table() {
-                        val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
-                    } else {
-                        None
-                    };
+        if let Some(deps) = value.get("dependencies") && let Some(table) = deps.as_table() {
+            for (name, val) in table.iter() {
+                // val peut être une table (avec version, path, etc.) ou une string
+                let version_opt = if val.is_str() {
+                    val.as_str().map(|s| s.to_string())
+                } else if val.is_table() {
+                    val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
+                } else {
+                    None
+                };
 
-                    if let Some(ver) = version_opt {
-                        // Nettoyer les contraintes courantes (ex: ^1.2.3 -> 1.2.3)
-                        let cleaned = ver.trim();
-                        // Normaliser si nécessaire
-                        let candidate = if let Ok(_) = semver::Version::parse(cleaned) {
-                            cleaned.to_string()
-                        } else {
-                            self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
-                        };
-                        if let Ok(version) = semver::Version::parse(&candidate) {
-                            let found = self.db.check_vulnerability(name, &version);
-                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                        } else {
-                            eprintln!("⚠️ [Cargo.toml] Version non parsable pour {}: {}", name, ver);
-                        }
+                if let Some(ver) = version_opt {
+                    // Nettoyer les contraintes courantes (ex: ^1.2.3 -> 1.2.3)
+                    let cleaned = ver.trim();
+                    // Normaliser si nécessaire
+                    let candidate = if semver::Version::parse(cleaned).is_ok() {
+                        cleaned.to_string()
                     } else {
-                        // Pas de version spécifiée - ignorer mais log
-                        eprintln!("ℹ️ [Cargo.toml] Pas de version pour {} - ignoré", name);
+                        self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
+                    };
+                    if let Ok(version) = semver::Version::parse(&candidate) {
+                        let found = self.db.check_vulnerability(name, &version);
+                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                    } else {
+                        eprintln!("⚠️ [Cargo.toml] Version non parsable pour {}: {}", name, ver);
                     }
+                } else {
+                    // Pas de version spécifiée - ignorer mais log
+                    eprintln!("ℹ️ [Cargo.toml] Pas de version pour {} - ignoré", name);
                 }
             }
         }
 
-        if let Some(dev_deps) = value.get("dev-dependencies") {
-            if let Some(table) = dev_deps.as_table() {
-                for (name, val) in table.iter() {
-                    let version_opt = if val.is_str() {
-                        val.as_str().map(|s| s.to_string())
-                    } else if val.is_table() {
-                        val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
-                    } else {
-                        None
-                    };
+        if let Some(dev_deps) = value.get("dev-dependencies") && let Some(table) = dev_deps.as_table() {
+            for (name, val) in table.iter() {
+                let version_opt = if val.is_str() {
+                    val.as_str().map(|s| s.to_string())
+                } else if val.is_table() {
+                    val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
+                } else {
+                    None
+                };
 
-                    if let Some(ver) = version_opt {
-                        let cleaned = ver.trim();
-                        let candidate = if let Ok(_) = semver::Version::parse(cleaned) {
-                            cleaned.to_string()
-                        } else {
-                            self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
-                        };
-                        if let Ok(version) = semver::Version::parse(&candidate) {
-                            let found = self.db.check_vulnerability(name, &version);
-                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                        }
+                if let Some(ver) = version_opt {
+                    let cleaned = ver.trim();
+                    let candidate = if semver::Version::parse(cleaned).is_ok() {
+                        cleaned.to_string()
+                    } else {
+                        self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
+                    };
+                    if let Ok(version) = semver::Version::parse(&candidate) {
+                        let found = self.db.check_vulnerability(name, &version);
+                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
                     }
                 }
             }
@@ -424,7 +420,7 @@ impl SecurityManager {
 
             // 5. Traiter les dépendances imbriquées si présentes
             if let Some(nested_deps) = &pkg_entry.dependencies {
-                vulnerabilities.extend(self.process_npm_dependencies(clean_name, &nested_deps)?);
+                vulnerabilities.extend(self.process_npm_dependencies(clean_name, nested_deps)?);
             }
         }
 
@@ -568,7 +564,7 @@ impl SecurityManager {
 
                 if let Some(ver) = version_opt {
                     let cleaned = ver.trim();
-                    let candidate = if let Ok(_) = semver::Version::parse(cleaned) {
+                    let candidate = if semver::Version::parse(cleaned).is_ok() {
                         cleaned.to_string()
                     } else {
                         self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
@@ -588,17 +584,13 @@ impl SecurityManager {
         };
 
         // dependencies
-        if let Some(deps) = v.get("dependencies") {
-            if let Some(obj) = deps.as_object() {
+if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
                 process_deps(obj)?;
             }
-        }
 
-        // devDependencies
-        if let Some(dev) = v.get("devDependencies") {
-            if let Some(obj) = dev.as_object() {
+            // devDependencies
+            if let Some(dev) = v.get("devDependencies") && let Some(obj) = dev.as_object() {
                 process_deps(obj)?;
-            }
         }
 
         Ok(vulnerabilities)

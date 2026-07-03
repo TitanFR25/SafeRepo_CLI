@@ -34,19 +34,10 @@ pub struct Advisory {
 }
 
 // Détails des versions pour le moteur de comparaison SemVer
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 pub struct Versions {
     pub patched: Vec<String>,            // Versions contenant le correctif
     pub unaffected: Option<Vec<String>>, // Versions non affectées
-}
-
-impl Default for Versions {
-    fn default() -> Self {
-        Self {
-            patched: vec![],
-            unaffected: None,
-        }
-    }
 }
 // Structure pour stocker l'intégriter des fichiers
 #[derive(Debug, Clone)]
@@ -91,7 +82,7 @@ impl VulnerabilityDB {
         }
     }
 
-    // Calcule le hash256 d'un fichier
+// Calcule le hash256 d'un fichier
     // Retourne le hash en format hexadecimal
     pub fn calculate_file_hash(file_path: &Path) -> SafeRepoResult<String> {
         // Lire le fichier avec gestion d'erreur
@@ -315,7 +306,7 @@ impl VulnerabilityDB {
 
                     self.advisories
                         .entry(pkg_name)
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(file_data.advisory);
 
                     // Stocker le hash et les métadonnées
@@ -342,10 +333,10 @@ impl VulnerabilityDB {
                     error_count += 1;
                     errors_log.push(e);
 
-                    if let Some(last_err) = errors_log.last() {
-                        if Self::is_critical_toml_error(last_err) {
-                            eprintln!("🚨 ALERTE: Erreur TOML critique détectée");
-                        }
+                    if let Some(last_err) = errors_log.last()
+                        && Self::is_critical_toml_error(last_err)
+                    {
+                        eprintln!("🚨 ALERTE: Erreur TOML critique détectée");
                     }
                 }
             }
@@ -449,5 +440,11 @@ impl VulnerabilityDB {
             }
         }
         found_vulnerability
+    }
+}
+
+impl Default for VulnerabilityDB {
+    fn default() -> Self {
+        Self::new()
     }
 }
