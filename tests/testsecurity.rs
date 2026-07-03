@@ -217,9 +217,9 @@ version = "not.a.valid.version""#;
 
 #[cfg(test)]
 mod test_multi_parsers {
+    use SafeRepo_CLI::secure::security::SecurityManager;
     use std::fs;
     use tempfile::TempDir;
-    use SafeRepo_CLI::secure::security::SecurityManager;
 
     // TEST 1: Parser un package-lock.json valide
     #[test]
@@ -275,7 +275,7 @@ mod test_multi_parsers {
         assert!(result.is_ok(), "Doit parser requirements.txt valide");
     }
 
-    // TEST 3 : Parser un go.mod valide 
+    // TEST 3 : Parser un go.mod valide
     #[test]
     fn test_parse_go_mod_valide() {
         let temp_dir = TempDir::new().expect("répertoire temp");
@@ -350,8 +350,15 @@ require (
         let mut manager = SecurityManager::new("vulnera_db");
         let result = manager.analyze_file(&package_json);
 
-        assert!(result.is_ok(), "Le parser doit gérer les versions invalides sans panic");
+        assert!(
+            result.is_ok(),
+            "Le parser doit gérer les versions invalides sans panic"
+        );
         let issues = result.unwrap_or_default();
-        assert_eq!(issues.len(), 0, "Aucune vulnérabilité attendue pour version invalide");
+        assert_eq!(
+            issues.len(),
+            0,
+            "Aucune vulnérabilité attendue pour version invalide"
+        );
     }
 }

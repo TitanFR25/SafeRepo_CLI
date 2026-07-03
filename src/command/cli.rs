@@ -1,16 +1,16 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
-use std::fs;
+use log::{debug, info};
 use serde_json::json;
-use log::{info, debug};
+use std::fs;
+use std::path::PathBuf;
 
+use crate::command::config::SafeRepoConfig;
+use crate::database::db::{Advisory, Severity};
 use crate::scaning::scan;
 use crate::secure::security::SecurityManager;
-use crate::database::db::{Advisory, Severity};
-use crate::command::config::SafeRepoConfig;
 
 /// SafeRepo - Scanner de vulnérabilités multi-langage
-/// 
+///
 /// Outil CLI puissant pour scanner les vulnérabilités de dépendances
 /// Compatible avec tous les langages majeurs.
 #[derive(Parser, Debug)]
@@ -19,7 +19,7 @@ use crate::command::config::SafeRepoConfig;
     version = "0.6.5",
     about = "Scanner de vulnérabilités pour dépendances multi-langage",
     long_about = "SafeRepo est un outil CLI pour scanner les vulnérabilités de vos dépendances dans les projets Rust, Node.js, Python, Go, etc.\n\nUsage: saferepo <COMMAND> [OPTIONS]\n\nExamples:\n  saferepo scan .                 # Scanner le répertoire courant\n  saferepo scan /path/to/project  # Scanner un projet spécifique\n  saferepo check Cargo.lock       # Vérifier un seul manifest\n  saferepo update                 # Mettre à jour la base de données\n  saferepo --version              # Afficher la version",
-    author = "SafeRepo Team",
+    author = "SafeRepo Team"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -48,9 +48,8 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
-
     // Scanner un projet pour détecter les vulnérabilités
-    // 
+    //
     // Analyse récursivement le répertoire spécifié et détecte
     // toutes les vulnérabilités connues dans les dépendances.
     #[command(about = "Scanner un projet pour vulnérabilités")]
@@ -80,7 +79,7 @@ pub enum Commands {
     },
 
     // Vérifier un seul fichier manifeste
-    // 
+    //
     // Analyse un fichier manifeste spécifique (Cargo.lock, package.json, etc.)
     // et retourne les vulnérabilités trouvées pour ce fichier.
     #[command(about = "Vérifier un fichier manifeste")]
@@ -103,7 +102,7 @@ pub enum Commands {
     },
 
     // Mettre à jour la base de données des vulnérabilités
-    // 
+    //
     // Télécharge et vérifie la dernière version de la base de données
     // depuis les sources officielles (OSV.dev, GitHub Advisory Database).
     #[command(about = "Mettre à jour la base de données")]
@@ -126,7 +125,7 @@ pub enum Commands {
     },
 
     // Afficher la configuration active
-    // 
+    //
     // Affiche la configuration utilisée par SafeRepo, incluant
     // les patterns ignorés, les seuils de sévérité, etc.
     #[command(about = "Afficher la configuration")]
@@ -141,7 +140,7 @@ pub enum Commands {
     },
 
     // Afficher les statistiques de sécurité
-    // 
+    //
     // Affiche un résumé des vulnerabilités trouvées, statistiques,
     // et tendances temporelles.
     #[command(about = "Afficher les statistiques")]
@@ -175,7 +174,7 @@ impl Cli {
                     "debug".to_string()
                 } else {
                     "info".to_string()
-                } 
+                }
             }
         }
     }
@@ -237,10 +236,7 @@ impl Cli {
                 self.handle_update(*force, source.as_deref(), *verbose_update)?;
             }
 
-            Commands::Config {
-                show_path,
-                reset,
-            } => {
+            Commands::Config { show_path, reset } => {
                 self.handle_config(*show_path, *reset)?;
             }
 
@@ -289,11 +285,14 @@ impl Cli {
         output: Option<&PathBuf>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         info!("Démarrage du scan du répertoire: {:?}", path);
-        debug!("Sévérité minimale: {:?}, Sortie: {:?}", min_severity, output);
+        debug!(
+            "Sévérité minimale: {:?}, Sortie: {:?}",
+            min_severity, output
+        );
 
         let mut security_manager = SecurityManager::new("vulnera_db");
         scan::scan_repo(path, &mut security_manager)?;
-        
+
         // Récupérer toutes les vulnérabilités depuis la DB du manager
         let all_vulnerabilities: Vec<Advisory> = security_manager
             .db
@@ -301,8 +300,11 @@ impl Cli {
             .values()
             .flat_map(|v| v.iter().cloned())
             .collect();
-        
-        info!("Scan terminé: {} vulnérabilités détectées", all_vulnerabilities.len());
+
+        info!(
+            "Scan terminé: {} vulnérabilités détectées",
+            all_vulnerabilities.len()
+        );
 
         // Filtrer par sévérité si spécifié
         let filtered: Vec<_> = if let Some(sev) = min_severity {
@@ -313,7 +315,7 @@ impl Cli {
         } else {
             all_vulnerabilities
         };
-        
+
         // OUTPUT JSON
         if self.json {
             let json_output = json!({
@@ -464,18 +466,21 @@ impl Cli {
             }
 
             if let Some(out_path) = output {
-                std::fs::write(out_path, format!(
-                    "Fichier: {}\n\n{}",
-                    file.display(),
-                    filtered
-                        .iter()
-                        .map(|v| format!(
-                            "🚨 {} - {}\n   Sévérité: {:?}\n   Versions corrigées: {:?}",
-                            v.package, v.title, v.severity, v.versions.patched
-                        ))
-                        .collect::<Vec<_>>()
-                        .join("\n\n")
-                ))?;
+                std::fs::write(
+                    out_path,
+                    format!(
+                        "Fichier: {}\n\n{}",
+                        file.display(),
+                        filtered
+                            .iter()
+                            .map(|v| format!(
+                                "🚨 {} - {}\n   Sévérité: {:?}\n   Versions corrigées: {:?}",
+                                v.package, v.title, v.severity, v.versions.patched
+                            ))
+                            .collect::<Vec<_>>()
+                            .join("\n\n")
+                    ),
+                )?;
                 info!("Rapport texte check sauvegardé: {:?}", out_path);
             }
         }
@@ -526,13 +531,20 @@ impl Cli {
         }
 
         println!("\n✅ Base de données mise à jour avec succès !");
-        println!("📅 Version : v0.6.5 (updated at {})", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"));
-        
+        println!(
+            "📅 Version : v0.6.5 (updated at {})",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        );
+
         Ok(())
     }
 
     // Télécharge les vulnérabilités depuis OSV.dev
-    fn download_from_osv(&self, force: bool, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    fn download_from_osv(
+        &self,
+        force: bool,
+        verbose: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if verbose {
             println!("   [1/3] Vérification des versions...");
         }
@@ -545,8 +557,10 @@ impl Cli {
             && elapsed.as_secs() < 86400
         {
             // Moins de 24h
-            println!("📦 Base de données à jour (mise à jour il y a {} heures)", 
-                elapsed.as_secs() / 3600);
+            println!(
+                "📦 Base de données à jour (mise à jour il y a {} heures)",
+                elapsed.as_secs() / 3600
+            );
             return Ok(());
         }
 
@@ -561,7 +575,7 @@ impl Cli {
         // let client = reqwest::Client::new();
         // let url = "https://api.osv.dev/v1/query";
         // ... faire requête POST avec les dépendances à vérifier
-        
+
         println!("   📥 Téléchargement des données OSV.dev...");
         println!("   ✓ CVE Rust");
         println!("   ✓ CVE Node.js");
@@ -573,8 +587,11 @@ impl Cli {
         }
 
         // Mettre à jour le timestamp
-        fs::write("vulnera_db/osv_last_update.txt", 
-            chrono::Local::now().to_rfc3339()).ok();
+        fs::write(
+            "vulnera_db/osv_last_update.txt",
+            chrono::Local::now().to_rfc3339(),
+        )
+        .ok();
 
         println!("   ✅ Données téléchargées et vérifiées");
 
@@ -582,7 +599,11 @@ impl Cli {
     }
 
     // Télécharge les vulnérabilités depuis GitHub Advisory Database
-    fn download_from_github(&self, force: bool, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    fn download_from_github(
+        &self,
+        force: bool,
+        verbose: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if verbose {
             println!("   [1/3] Vérification des versions...");
         }
@@ -593,8 +614,10 @@ impl Cli {
             && let Ok(elapsed) = modified.elapsed()
             && elapsed.as_secs() < 86400
         {
-            println!("📦 Base de données à jour (mise à jour il y a {} heures)", 
-                elapsed.as_secs() / 3600);
+            println!(
+                "📦 Base de données à jour (mise à jour il y a {} heures)",
+                elapsed.as_secs() / 3600
+            );
             return Ok(());
         }
 
@@ -620,8 +643,11 @@ impl Cli {
             println!("   [3/3] Vérification d'intégrité...");
         }
 
-        fs::write("vulnera_db/github_last_update.txt",
-            chrono::Local::now().to_rfc3339()).ok();
+        fs::write(
+            "vulnera_db/github_last_update.txt",
+            chrono::Local::now().to_rfc3339(),
+        )
+        .ok();
 
         println!("   ✅ Données téléchargées et vérifiées");
 
@@ -649,7 +675,11 @@ impl Cli {
 
             println!("Emplacements de recherche:");
             for (i, path) in standard_paths.iter().enumerate() {
-                let status = if path.exists() { "✓ EXISTS" } else { "✗ not found" };
+                let status = if path.exists() {
+                    "✓ EXISTS"
+                } else {
+                    "✗ not found"
+                };
                 println!("  {}. {} [{}]", i + 1, path.display(), status);
             }
 
@@ -660,7 +690,8 @@ impl Cli {
             println!("========================\n");
             println!("Sévérité minimale: {}", config.min_severity);
             println!("Max depth: {}", config.max_depth);
-            println!("Max file size: {} bytes ({} MB)",
+            println!(
+                "Max file size: {} bytes ({} MB)",
                 config.max_file_size,
                 config.max_file_size / (1024 * 1024)
             );
@@ -704,7 +735,7 @@ impl Cli {
         }
 
         if reset {
-           debug!("Réinitialisation de la configuration");
+            debug!("Réinitialisation de la configuration");
             let config = SafeRepoConfig::default();
 
             // Sauvegarder dans le répertoire config standard
@@ -734,13 +765,17 @@ impl Cli {
         by_severity: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         info!("Récupération des statistiques (derniers {} jours)", days);
-        debug!("Par langage: {}, Par sévérité: {}", by_language, by_severity);
+        debug!(
+            "Par langage: {}, Par sévérité: {}",
+            by_language, by_severity
+        );
 
         let mut db = crate::database::db::VulnerabilityDB::new();
         db.load_from_dir("vulnera_db")?;
-        
+
         // Compter les stats par sévérité
-        let mut stats_by_severity: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        let mut stats_by_severity: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
         for advisories in db.advisories.values() {
             for adv in advisories {
                 let sev_str = format!("{:?}", adv.severity).to_lowercase();
@@ -766,7 +801,8 @@ impl Cli {
 
             if by_language {
                 // Compter par langage basé sur les patterns de package
-                let mut lang_count: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+                let mut lang_count: std::collections::HashMap<String, u32> =
+                    std::collections::HashMap::new();
                 for pkg_name in db.advisories.keys() {
                     let lang = if pkg_name.contains("@") {
                         "Node.js"
@@ -779,10 +815,10 @@ impl Cli {
                     };
                     *lang_count.entry(lang.to_string()).or_insert(0) += 1;
                 }
-                json_stats.as_object_mut().unwrap().insert(
-                    "by_language".to_string(),
-                    json!(lang_count),
-                );
+                json_stats
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("by_language".to_string(), json!(lang_count));
             }
 
             println!("{}", serde_json::to_string_pretty(&json_stats)?);
@@ -793,10 +829,22 @@ impl Cli {
             println!("Total d'entrées: {}\n", total_entries);
 
             println!("Par Sévérité:");
-            println!("  🔴 CRITICAL: {}", stats_by_severity.get("critical").copied().unwrap_or(0));
-            println!("  🟠 HIGH:     {}", stats_by_severity.get("high").copied().unwrap_or(0));
-            println!("  🟡 MEDIUM:   {}", stats_by_severity.get("medium").copied().unwrap_or(0));
-            println!("  🟢 LOW:      {}", stats_by_severity.get("low").copied().unwrap_or(0));
+            println!(
+                "  🔴 CRITICAL: {}",
+                stats_by_severity.get("critical").copied().unwrap_or(0)
+            );
+            println!(
+                "  🟠 HIGH:     {}",
+                stats_by_severity.get("high").copied().unwrap_or(0)
+            );
+            println!(
+                "  🟡 MEDIUM:   {}",
+                stats_by_severity.get("medium").copied().unwrap_or(0)
+            );
+            println!(
+                "  🟢 LOW:      {}",
+                stats_by_severity.get("low").copied().unwrap_or(0)
+            );
 
             if by_language {
                 println!("\nPar Langage:");

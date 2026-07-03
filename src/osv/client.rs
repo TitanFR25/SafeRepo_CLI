@@ -1,9 +1,9 @@
 // Client OSV.dev - Interface avec l'API Open Source Vulnerabilities
 // Permet de rechercher des vulnérabilités par package name et version
 
-use serde::{Deserialize, Serialize};
-use crate::errorhandle::SafeRepoResult;
 use crate::database::db::{Advisory, Severity, Versions};
+use crate::errorhandle::SafeRepoResult;
+use serde::{Deserialize, Serialize};
 
 const _OSV_API_URL: &str = "https://api.osv.dev/v1/query";
 
@@ -70,14 +70,11 @@ pub struct OsvClient;
 
 impl OsvClient {
     /// Cherche les vulnérabilités pour un package spécifique
-    /// 
+    ///
     /// # Arguments
     /// * `package_name` - Nom du package (ex: "serde", "lodash")
     /// * `ecosystem` - Écosystème (ex: "npm", "crates.io", "PyPI")
-    pub async fn query(
-        package_name: &str,
-        ecosystem: &str,
-    ) -> SafeRepoResult<Vec<Advisory>> {
+    pub async fn query(package_name: &str, ecosystem: &str) -> SafeRepoResult<Vec<Advisory>> {
         // 🔍 Construire la requête
         let _query = OsvQuery {
             package: OsvPackageQuery {
@@ -88,11 +85,7 @@ impl OsvClient {
 
         // ⚠️ Pour l'instant, retourner un vecteur vide (pas de dépendance HTTP en compile-time)
         // En production, utiliser reqwest pour faire la requête réelle
-        log::debug!(
-            "OSV Query (simulated): {} in {}",
-            package_name,
-            ecosystem
-        );
+        log::debug!("OSV Query (simulated): {} in {}", package_name, ecosystem);
 
         Ok(Vec::new())
     }

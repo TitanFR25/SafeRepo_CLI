@@ -293,7 +293,9 @@ mod tests_integration {
         );
 
         // Comparer les hashes avec le log d'audit précédent
-        if let Some(original_audit) = &db.integrity_log && let Some(modified_audit) = &db_modified.integrity_log {
+        if let Some(original_audit) = &db.integrity_log
+            && let Some(modified_audit) = &db_modified.integrity_log
+        {
             let hashes_changed = original_audit
                 .advisories
                 .iter()

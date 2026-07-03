@@ -1,7 +1,7 @@
+use log::{debug, info};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use log::{info, debug};
 
 use crate::errorhandle::{SafeRepoError, SafeRepoResult};
 
@@ -114,14 +114,13 @@ impl SafeRepoConfig {
     pub fn load(path: &Path) -> SafeRepoResult<Self> {
         if path.exists() {
             debug!("Chargement configuration depuis: {:?}", path);
-            let content = fs::read_to_string(path)
-                .map_err(|e| SafeRepoError::FileNotFound {
-                    file_path: path.display().to_string(),
-                    suggestion: format!("Cannot read config file: {}", e),
-                })?;
+            let content = fs::read_to_string(path).map_err(|e| SafeRepoError::FileNotFound {
+                file_path: path.display().to_string(),
+                suggestion: format!("Cannot read config file: {}", e),
+            })?;
 
-            let config: SafeRepoConfig = toml::from_str(&content)
-                .map_err(|e| SafeRepoError::ConfigError {
+            let config: SafeRepoConfig =
+                toml::from_str(&content).map_err(|e| SafeRepoError::ConfigError {
                     key: "config file".to_string(),
                     reason: format!("Invalid TOML syntax: {}", e),
                 })?;
@@ -158,17 +157,15 @@ impl SafeRepoConfig {
 
     // Sauvegarde la configuration dans un fichier
     pub fn save(&self, path: &Path) -> SafeRepoResult<()> {
-        let content = toml::to_string_pretty(self)
-            .map_err(|e| SafeRepoError::ConfigError {
-                key: "serialization".to_string(),
-                reason: format!("Failed to convert config to TOML: {}", e),
-            })?;
+        let content = toml::to_string_pretty(self).map_err(|e| SafeRepoError::ConfigError {
+            key: "serialization".to_string(),
+            reason: format!("Failed to convert config to TOML: {}", e),
+        })?;
 
-        fs::write(path, content)
-            .map_err(|_| SafeRepoError::PermissionDenied {
-                file_path: path.display().to_string(),
-                operation: "write".to_string(),
-            })?;
+        fs::write(path, content).map_err(|_| SafeRepoError::PermissionDenied {
+            file_path: path.display().to_string(),
+            operation: "write".to_string(),
+        })?;
 
         info!("Configuration sauvegardée dans: {:?}", path);
         Ok(())
@@ -180,7 +177,8 @@ impl SafeRepoConfig {
             .or_else(|_| std::env::var("USERPROFILE"))
             .map_err(|_| SafeRepoError::ConfigError {
                 key: "HOME directory".to_string(),
-                reason: "Could not determine home directory - environment variable not set".to_string(),
+                reason: "Could not determine home directory - environment variable not set"
+                    .to_string(),
             })?;
 
         let config_dir = PathBuf::from(home).join(".config/saferepo");
@@ -196,7 +194,10 @@ impl SafeRepoConfig {
         let config = Self::default();
         config.save(&config_path)?;
 
-        info!("Fichier de configuration par défaut généré: {:?}", config_path);
+        info!(
+            "Fichier de configuration par défaut généré: {:?}",
+            config_path
+        );
         Ok(config_path)
     }
 
@@ -245,8 +246,10 @@ impl SafeRepoConfig {
         if !valid_severities.contains(&self.min_severity.as_str()) {
             return Err(SafeRepoError::ConfigError {
                 key: "min_severity".to_string(),
-                reason: format!("Invalid severity level '{}'. Must be one of: critical, high, medium, low",
-                    self.min_severity),
+                reason: format!(
+                    "Invalid severity level '{}'. Must be one of: critical, high, medium, low",
+                    self.min_severity
+                ),
             });
         }
 
@@ -254,7 +257,9 @@ impl SafeRepoConfig {
         if self.max_depth == 0 {
             return Err(SafeRepoError::ConfigError {
                 key: "max_depth".to_string(),
-                reason: "max_depth must be greater than 0 to allow scanning at least the root directory".to_string(),
+                reason:
+                    "max_depth must be greater than 0 to allow scanning at least the root directory"
+                        .to_string(),
             });
         }
 
@@ -271,8 +276,10 @@ impl SafeRepoConfig {
         if !valid_formats.contains(&self.output_format.as_str()) {
             return Err(SafeRepoError::ConfigError {
                 key: "output_format".to_string(),
-                reason: format!("Invalid output format '{}'. Supported formats: text, json, html, csv",
-                    self.output_format),
+                reason: format!(
+                    "Invalid output format '{}'. Supported formats: text, json, html, csv",
+                    self.output_format
+                ),
             });
         }
 

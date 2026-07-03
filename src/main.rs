@@ -10,7 +10,7 @@ use std::process;
 fn main() {
     let start_path = ".";
     let mut manager = SecurityManager::new("vulnera_db");
-    
+
     // Exécuter le scan et gérer les erreurs de manière professionnelle
     match scan::scan_repo(start_path, &mut manager) {
         Ok(()) => {

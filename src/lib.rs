@@ -3,9 +3,9 @@
 
 #![allow(non_snake_case)]
 
+pub mod command;
 pub mod database;
 pub mod errorhandle;
+pub mod osv;
 pub mod scaning;
 pub mod secure;
-pub mod command;
-pub mod osv;

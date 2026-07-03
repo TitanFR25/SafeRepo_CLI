@@ -82,7 +82,7 @@ impl VulnerabilityDB {
         }
     }
 
-// Calcule le hash256 d'un fichier
+    // Calcule le hash256 d'un fichier
     // Retourne le hash en format hexadecimal
     pub fn calculate_file_hash(file_path: &Path) -> SafeRepoResult<String> {
         // Lire le fichier avec gestion d'erreur

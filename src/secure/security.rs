@@ -52,7 +52,7 @@ struct PythonRequirement {
 // Structure pour stocker une dépendance Go parsée
 #[derive(Debug, Clone)]
 struct GoModule {
-    name: String, 
+    name: String,
     version: String,
 }
 
@@ -98,7 +98,10 @@ impl GoModule {
             return None;
         }
 
-        let version = version_str.strip_prefix("v").unwrap_or(version_str).to_string();
+        let version = version_str
+            .strip_prefix("v")
+            .unwrap_or(version_str)
+            .to_string();
 
         Some(GoModule { name, version })
     }
@@ -180,7 +183,10 @@ impl SecurityManager {
         let mut db = VulnerabilityDB::new();
         if let Err(e) = db.load_from_dir(db_path) {
             eprintln!("⚠️ [security] Erreur de chargement de la DB locale : {}", e);
-            eprintln!("💡 Assurez-vous que le répertoire {} existe avec des fichiers TOML", db_path);
+            eprintln!(
+                "💡 Assurez-vous que le répertoire {} existe avec des fichiers TOML",
+                db_path
+            );
         }
         Self { db }
     }
@@ -246,14 +252,14 @@ impl SecurityManager {
             }
             "txt" => {
                 if file_path.file_name().unwrap_or_default() == "requirements.txt" {
-                     self.process_requirements_txt(file_path)
+                    self.process_requirements_txt(file_path)
                 } else {
                     Err(SafeRepoError::ValidationError {
                         file_path: file_path.display().to_string(),
                         reason: format!("Fichier TXT inconnu: {}", file_path.display()),
                     })
                 }
-            },
+            }
             "mod" => {
                 if file_path.file_name().unwrap_or_default() == "go.mod" {
                     self.process_go_mod(file_path)
@@ -277,7 +283,7 @@ impl SecurityManager {
             _ => Err(SafeRepoError::ValidationError {
                 file_path: file_path.display().to_string(),
                 reason: format!("Type de fichier non supporté: {}", extension),
-            })
+            }),
         }
     }
 
@@ -295,21 +301,25 @@ impl SecurityManager {
             });
         }
 
-        let value = toml::from_str::<toml::Value>(&content).map_err(|e| SafeRepoError::TomlError {
-            context: format!("parsing Cargo.toml: {}", file_path.display()),
-            source: e,
-        })?;
+        let value =
+            toml::from_str::<toml::Value>(&content).map_err(|e| SafeRepoError::TomlError {
+                context: format!("parsing Cargo.toml: {}", file_path.display()),
+                source: e,
+            })?;
 
         let mut vulnerabilities = Vec::new();
 
         // Rechercher les tables [dependencies] et [dev-dependencies]
-        if let Some(deps) = value.get("dependencies") && let Some(table) = deps.as_table() {
+        if let Some(deps) = value.get("dependencies")
+            && let Some(table) = deps.as_table()
+        {
             for (name, val) in table.iter() {
                 // val peut être une table (avec version, path, etc.) ou une string
                 let version_opt = if val.is_str() {
                     val.as_str().map(|s| s.to_string())
                 } else if val.is_table() {
-                    val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
+                    val.get("version")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
                 } else {
                     None
                 };
@@ -321,13 +331,17 @@ impl SecurityManager {
                     let candidate = if semver::Version::parse(cleaned).is_ok() {
                         cleaned.to_string()
                     } else {
-                        self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
+                        self.normalize_semver(cleaned)
+                            .unwrap_or_else(|| cleaned.to_string())
                     };
                     if let Ok(version) = semver::Version::parse(&candidate) {
                         let found = self.db.check_vulnerability(name, &version);
                         vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
                     } else {
-                        eprintln!("⚠️ [Cargo.toml] Version non parsable pour {}: {}", name, ver);
+                        eprintln!(
+                            "⚠️ [Cargo.toml] Version non parsable pour {}: {}",
+                            name, ver
+                        );
                     }
                 } else {
                     // Pas de version spécifiée - ignorer mais log
@@ -336,12 +350,15 @@ impl SecurityManager {
             }
         }
 
-        if let Some(dev_deps) = value.get("dev-dependencies") && let Some(table) = dev_deps.as_table() {
+        if let Some(dev_deps) = value.get("dev-dependencies")
+            && let Some(table) = dev_deps.as_table()
+        {
             for (name, val) in table.iter() {
                 let version_opt = if val.is_str() {
                     val.as_str().map(|s| s.to_string())
                 } else if val.is_table() {
-                    val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
+                    val.get("version")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
                 } else {
                     None
                 };
@@ -351,7 +368,8 @@ impl SecurityManager {
                     let candidate = if semver::Version::parse(cleaned).is_ok() {
                         cleaned.to_string()
                     } else {
-                        self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
+                        self.normalize_semver(cleaned)
+                            .unwrap_or_else(|| cleaned.to_string())
                     };
                     if let Ok(version) = semver::Version::parse(&candidate) {
                         let found = self.db.check_vulnerability(name, &version);
@@ -543,54 +561,65 @@ impl SecurityManager {
         }
 
         // 2. Parser JSON
-        let v: serde_json::Value = serde_json::from_str(&content).map_err(|e| SafeRepoError::ValidationError {
-            file_path: file_path.display().to_string(),
-            reason: format!("Invalid JSON in package.json: {}", e),
-        })?;
+        let v: serde_json::Value =
+            serde_json::from_str(&content).map_err(|e| SafeRepoError::ValidationError {
+                file_path: file_path.display().to_string(),
+                reason: format!("Invalid JSON in package.json: {}", e),
+            })?;
 
         let mut vulnerabilities = Vec::new();
 
         // Helper to process a dependency map
-        let mut process_deps = |map: &serde_json::Map<String, serde_json::Value>| -> SafeRepoResult<()> {
-            for (name, val) in map.iter() {
-                // val peut être une string ou un objet
-                let version_opt = if val.is_string() {
-                    val.as_str().map(|s| s.to_string())
-                } else if val.is_object() {
-                    val.get("version").and_then(|v| v.as_str().map(|s| s.to_string()))
-                } else {
-                    None
-                };
-
-                if let Some(ver) = version_opt {
-                    let cleaned = ver.trim();
-                    let candidate = if semver::Version::parse(cleaned).is_ok() {
-                        cleaned.to_string()
+        let mut process_deps =
+            |map: &serde_json::Map<String, serde_json::Value>| -> SafeRepoResult<()> {
+                for (name, val) in map.iter() {
+                    // val peut être une string ou un objet
+                    let version_opt = if val.is_string() {
+                        val.as_str().map(|s| s.to_string())
+                    } else if val.is_object() {
+                        val.get("version")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
                     } else {
-                        self.normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
+                        None
                     };
 
-                    if let Ok(version) = semver::Version::parse(&candidate) {
-                        let found = self.db.check_vulnerability(name, &version);
-                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                    if let Some(ver) = version_opt {
+                        let cleaned = ver.trim();
+                        let candidate = if semver::Version::parse(cleaned).is_ok() {
+                            cleaned.to_string()
+                        } else {
+                            self.normalize_semver(cleaned)
+                                .unwrap_or_else(|| cleaned.to_string())
+                        };
+
+                        if let Ok(version) = semver::Version::parse(&candidate) {
+                            let found = self.db.check_vulnerability(name, &version);
+                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                        } else {
+                            eprintln!(
+                                "⚠️ [package.json] Version non parsable pour {}: {}",
+                                name, ver
+                            );
+                        }
                     } else {
-                        eprintln!("⚠️ [package.json] Version non parsable pour {}: {}", name, ver);
+                        eprintln!("ℹ️ [package.json] Pas de version pour {} - ignoré", name);
                     }
-                } else {
-                    eprintln!("ℹ️ [package.json] Pas de version pour {} - ignoré", name);
                 }
-            }
-            Ok(())
-        };
+                Ok(())
+            };
 
         // dependencies
-if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
-                process_deps(obj)?;
-            }
+        if let Some(deps) = v.get("dependencies")
+            && let Some(obj) = deps.as_object()
+        {
+            process_deps(obj)?;
+        }
 
-            // devDependencies
-            if let Some(dev) = v.get("devDependencies") && let Some(obj) = dev.as_object() {
-                process_deps(obj)?;
+        // devDependencies
+        if let Some(dev) = v.get("devDependencies")
+            && let Some(obj) = dev.as_object()
+        {
+            process_deps(obj)?;
         }
 
         Ok(vulnerabilities)
@@ -600,11 +629,9 @@ if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
     /// Support de multiples formats et contraintes
     fn process_requirements_txt(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         // 1. Lire le fichier
-        let content = std::fs::read_to_string(file_path).map_err(|e| {
-            SafeRepoError::IoError {
-                context: format!("lecture de requirements.txt: {}", file_path.display()),
-                source: e,
-            }
+        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
+            context: format!("lecture de requirements.txt: {}", file_path.display()),
+            source: e,
         })?;
 
         // 2. Valider que le fichier n'est pas vide
@@ -637,16 +664,22 @@ if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
                             Err(_) => {
                                 // Essayer de normaliser la version Python vers semver
                                 // Format: 1.2.3 ou 1.2.3.post1 ou 1.2.3rc1
-                                if let Some(normalized) = self.normalize_python_version(version_str) {
+                                if let Some(normalized) = self.normalize_python_version(version_str)
+                                {
                                     match semver::Version::parse(&normalized) {
                                         Ok(version) => {
-                                            let found = self.db.check_vulnerability(&req.name, &version);
-                                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                                            let found =
+                                                self.db.check_vulnerability(&req.name, &version);
+                                            vulnerabilities
+                                                .extend(found.iter().map(|&adv| adv.clone()));
                                         }
                                         Err(e) => {
                                             eprintln!(
                                                 "⚠️ [requirements.txt:{}] Impossible de parser la version '{}' pour {}: {}",
-                                                line_num + 1, version_str, req.name, e
+                                                line_num + 1,
+                                                version_str,
+                                                req.name,
+                                                e
                                             );
                                         }
                                     }
@@ -657,7 +690,8 @@ if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
                         // Pas de version spécifiée - log comme info
                         eprintln!(
                             "ℹ️ [requirements.txt:{}] Pas de version spécifiée pour {} - vérification de version ignorée",
-                            line_num + 1, req.name
+                            line_num + 1,
+                            req.name
                         );
                     }
                 }
@@ -667,10 +701,7 @@ if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
             }
         }
 
-        eprintln!(
-            "✅ {} lignes traitées depuis requirements.txt",
-            line_count
-        );
+        eprintln!("✅ {} lignes traitées depuis requirements.txt", line_count);
 
         Ok(vulnerabilities)
     }
@@ -710,7 +741,10 @@ if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
     fn normalize_semver(&self, version_str: &str) -> Option<String> {
         let mut s = version_str.trim().to_string();
         // retirer operators courants
-        s = s.trim_start_matches('^').trim_start_matches('~').to_string();
+        s = s
+            .trim_start_matches('^')
+            .trim_start_matches('~')
+            .to_string();
         // retirer espaces
         s = s.trim().to_string();
 
@@ -731,11 +765,9 @@ if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
     /// Traite les directives require et replace
     fn process_go_mod(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         // 1. Lire le fichier
-        let content = std::fs::read_to_string(file_path).map_err(|e| {
-            SafeRepoError::IoError {
-                context: format!("lecture de go.mod: {}", file_path.display()),
-                source: e,
-            }
+        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
+            context: format!("lecture de go.mod: {}", file_path.display()),
+            source: e,
         })?;
 
         // 2. Valider que le fichier n'est pas vide
@@ -780,7 +812,10 @@ if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
                         Err(e) => {
                             eprintln!(
                                 "⚠️ [go.mod:{}] Version invalide pour {}: {} ({})",
-                                line_num + 1, module.name, module.version, e
+                                line_num + 1,
+                                module.name,
+                                module.version,
+                                e
                             );
                         }
                     }
@@ -791,10 +826,7 @@ if let Some(deps) = v.get("dependencies") && let Some(obj) = deps.as_object() {
             }
         }
 
-        eprintln!(
-            "✅ {} modules Go traités depuis go.mod",
-            line_count
-        );
+        eprintln!("✅ {} modules Go traités depuis go.mod", line_count);
 
         Ok(vulnerabilities)
     }

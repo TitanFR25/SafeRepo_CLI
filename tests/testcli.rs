@@ -20,11 +20,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { path, .. } => {
                 assert_eq!(path, &PathBuf::from("."));
@@ -49,11 +49,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { path, .. } => {
                 assert!(path.is_absolute() || path.display().to_string() == "/home/user/project");
@@ -78,11 +78,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { path, .. } => {
                 assert_eq!(path.display().to_string(), "../parent/project");
@@ -107,11 +107,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { min_severity, .. } => {
                 assert_eq!(min_severity, &Some("critical".to_string()));
@@ -136,11 +136,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { min_severity, .. } => {
                 assert_eq!(min_severity, &Some("high".to_string()));
@@ -165,11 +165,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { min_severity, .. } => {
                 assert_eq!(min_severity, &Some("medium".to_string()));
@@ -194,11 +194,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { min_severity, .. } => {
                 assert_eq!(min_severity, &Some("low".to_string()));
@@ -223,11 +223,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { exclude, .. } => {
                 assert_eq!(exclude, &Some(vec!["node_modules".to_string()]));
@@ -258,15 +258,20 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { exclude, .. } => {
                 assert_eq!(exclude.as_ref().unwrap().len(), 4);
-                assert!(exclude.as_ref().unwrap().contains(&"node_modules".to_string()));
+                assert!(
+                    exclude
+                        .as_ref()
+                        .unwrap()
+                        .contains(&"node_modules".to_string())
+                );
                 assert!(exclude.as_ref().unwrap().contains(&"test".to_string()));
             }
             _ => panic!("Expected Scan command"),
@@ -289,11 +294,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { exclude, .. } => {
                 let excludes = exclude.as_ref().unwrap();
@@ -319,11 +324,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { threads, .. } => {
                 assert_eq!(threads, &Some(1));
@@ -348,11 +353,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { threads, .. } => {
                 assert_eq!(threads, &Some(16));
@@ -378,11 +383,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { threads, .. } => {
                 // Parse accepte le nombre mais validation devrait être au runtime
@@ -408,11 +413,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { skip_code_scan, .. } => {
                 assert!(!skip_code_scan);
@@ -437,11 +442,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { skip_code_scan, .. } => {
                 assert!(*skip_code_scan);
@@ -466,11 +471,11 @@ mod tests_cli_complete {
             verbose: true,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         assert!(cli.verbose);
         assert_eq!(cli.get_log_level(), "debug");
     }
@@ -491,11 +496,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         assert!(!cli.verbose);
         assert_eq!(cli.get_log_level(), "info");
     }
@@ -519,7 +524,7 @@ mod tests_cli_complete {
             json: false,
             config: None,
         };
-        
+
         assert_eq!(cli.get_log_level(), "trace");
     }
 
@@ -544,7 +549,7 @@ mod tests_cli_complete {
                 json: false,
                 config: None,
             };
-            
+
             assert_eq!(cli.get_log_level(), level);
         }
     }
@@ -565,11 +570,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: true,
             config: None,
         };
-        
+
         assert!(cli.is_json_output());
     }
 
@@ -589,11 +594,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         assert!(!cli.is_json_output());
     }
 
@@ -611,13 +616,18 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
-            Commands::Check { file, detailed, min_severity, .. } => {
+            Commands::Check {
+                file,
+                detailed,
+                min_severity,
+                ..
+            } => {
                 assert_eq!(file, &PathBuf::from("Cargo.lock"));
                 assert!(*detailed);
                 assert_eq!(min_severity, &Some("high".to_string()));
@@ -640,13 +650,18 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
-            Commands::Check { file, detailed, min_severity, output } => {
+            Commands::Check {
+                file,
+                detailed,
+                min_severity,
+                output,
+            } => {
                 assert_eq!(file, &PathBuf::from("package-lock.json"));
                 assert!(!detailed);
                 assert!(min_severity.is_none());
@@ -670,13 +685,18 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
-            Commands::Update { force, source, verify_signature, verbose_update } => {
+            Commands::Update {
+                force,
+                source,
+                verify_signature,
+                verbose_update,
+            } => {
                 assert!(*force);
                 assert_eq!(source, &Some("osv".to_string()));
                 assert!(*verify_signature);
@@ -700,11 +720,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Update { source, .. } => {
                 assert_eq!(source, &Some("github".to_string()));
@@ -727,11 +747,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Update { source, .. } => {
                 assert_eq!(source, &Some("snyk".to_string()));
@@ -752,11 +772,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Config { show_path, reset } => {
                 assert!(*show_path);
@@ -778,11 +798,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Config { show_path, reset } => {
                 assert!(!*show_path);
@@ -805,13 +825,17 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
-            Commands::Stats { days, by_language, by_severity } => {
+            Commands::Stats {
+                days,
+                by_language,
+                by_severity,
+            } => {
                 assert_eq!(*days, 90);
                 assert!(*by_language);
                 assert!(*by_severity);
@@ -833,13 +857,17 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
-            Commands::Stats { days, by_language, by_severity } => {
+            Commands::Stats {
+                days,
+                by_language,
+                by_severity,
+            } => {
                 assert_eq!(*days, 30);
                 assert!(!*by_language);
                 assert!(!*by_severity);
@@ -861,11 +889,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Stats { days, .. } => {
                 assert_eq!(*days, 365);
@@ -891,11 +919,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: Some(config_path.clone()),
         };
-        
+
         assert_eq!(cli.get_config_path(), Some(&config_path));
     }
 
@@ -915,11 +943,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         assert_eq!(cli.get_config_path(), None);
     }
 
@@ -942,7 +970,7 @@ mod tests_cli_complete {
             json: true,
             config: Some(PathBuf::from("/etc/saferepo.toml")),
         };
-        
+
         match &cli.command {
             Commands::Scan {
                 path,
@@ -961,11 +989,14 @@ mod tests_cli_complete {
             }
             _ => panic!("Expected Scan command"),
         }
-        
+
         assert!(cli.verbose);
         assert_eq!(cli.get_log_level(), "debug");
         assert!(cli.is_json_output());
-        assert_eq!(cli.get_config_path().unwrap().display().to_string(), "/etc/saferepo.toml");
+        assert_eq!(
+            cli.get_config_path().unwrap().display().to_string(),
+            "/etc/saferepo.toml"
+        );
     }
 
     // TEST 35: Verbose et JSON output combinés
@@ -984,11 +1015,11 @@ mod tests_cli_complete {
             verbose: true,
             log_level: None,
             set_config: None,
-            
+
             json: true,
             config: None,
         };
-        
+
         assert!(cli.verbose);
         assert!(cli.is_json_output());
         assert_eq!(cli.get_log_level(), "debug");
@@ -1010,11 +1041,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         assert_eq!(cli.get_log_level(), "info");
     }
 
@@ -1034,11 +1065,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { exclude, .. } => {
                 assert!(exclude.is_some());
@@ -1065,11 +1096,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { path, .. } => {
                 // Vérifier que le chemin très long est accepté
@@ -1095,11 +1126,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: false,
             config: None,
         };
-        
+
         match &cli.command {
             Commands::Scan { path, .. } => {
                 let path_str = path.to_string_lossy();
@@ -1125,11 +1156,11 @@ mod tests_cli_complete {
             verbose: false,
             log_level: None,
             set_config: None,
-            
+
             json: true,
             config: None,
         };
-        
+
         assert!(cli.is_json_output());
         match &cli.command {
             Commands::Check { output, .. } => {
@@ -1144,7 +1175,12 @@ mod tests_cli_complete {
     // Objectif: Vérifier que différents fichiers manifest peuvent être checkés
     #[test]
     fn test_cli_multiple_manifest_files() {
-        let files = vec!["Cargo.lock", "package-lock.json", "requirements.txt", "go.mod"];
+        let files = vec![
+            "Cargo.lock",
+            "package-lock.json",
+            "requirements.txt",
+            "go.mod",
+        ];
         for file in files {
             let cli = Cli {
                 command: Commands::Check {
@@ -1155,12 +1191,12 @@ mod tests_cli_complete {
                 },
                 verbose: false,
                 log_level: None,
-            set_config: None,
-            
+                set_config: None,
+
                 json: false,
                 config: None,
             };
-            
+
             match &cli.command {
                 Commands::Check { file: f, .. } => {
                     assert_eq!(f.file_name().unwrap().to_str().unwrap(), file);
@@ -1180,7 +1216,7 @@ mod tests_cli_complete {
             ("report.csv", "csv"),
             ("report.html", "html"),
         ];
-        
+
         for (output_path, expected_ext) in outputs {
             let cli = Cli {
                 command: Commands::Scan {
@@ -1193,16 +1229,22 @@ mod tests_cli_complete {
                 },
                 verbose: false,
                 log_level: None,
-            set_config: None,
-            
+                set_config: None,
+
                 json: false,
                 config: None,
             };
-            
+
             match &cli.command {
                 Commands::Scan { output, .. } => {
                     assert_eq!(
-                        output.as_ref().unwrap().extension().unwrap().to_str().unwrap(),
+                        output
+                            .as_ref()
+                            .unwrap()
+                            .extension()
+                            .unwrap()
+                            .to_str()
+                            .unwrap(),
                         expected_ext
                     );
                 }

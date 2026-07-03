@@ -93,11 +93,7 @@ impl fmt::Display for SafeRepoError {
                     }
                     _ => "",
                 };
-                write!(
-                    f,
-                    "❌ Erreur I/O {}: {}{}", 
-                    context, source, suggestion
-                )
+                write!(f, "❌ Erreur I/O {}: {}{}", context, source, suggestion)
             }
 
             // Erreur TOML avec point d'erreur exact
@@ -168,7 +164,10 @@ impl fmt::Display for SafeRepoError {
             }
 
             // Erreur CLI
-            SafeRepoError::CliError { message, suggestion } => {
+            SafeRepoError::CliError {
+                message,
+                suggestion,
+            } => {
                 write!(
                     f,
                     "❌ Erreur ligne de commande: {}\n💡 {}\n\n💻 Utilisez 'saferepo --help' pour l'aide complète.",
@@ -177,7 +176,10 @@ impl fmt::Display for SafeRepoError {
             }
 
             // Fichier non trouvé
-            SafeRepoError::FileNotFound { file_path, suggestion } => {
+            SafeRepoError::FileNotFound {
+                file_path,
+                suggestion,
+            } => {
                 write!(
                     f,
                     "❌ Fichier non trouvé: {}\n💡 {}\n💡 Vérifiez le chemin et les permissions.",
@@ -186,7 +188,10 @@ impl fmt::Display for SafeRepoError {
             }
 
             // Permission d'accès refusée
-            SafeRepoError::PermissionDenied { file_path, operation } => {
+            SafeRepoError::PermissionDenied {
+                file_path,
+                operation,
+            } => {
                 write!(
                     f,
                     "❌ Accès refusé lors de l'opération '{}' sur: {}\n💡 Conseil: Vérifiez les permissions du fichier/dossier ou exécutez avec les droits appropriés.",
@@ -209,18 +214,18 @@ impl SafeRepoError {
     /// Retourner un code de sortie approprié selon le type d'erreur
     pub fn exit_code(&self) -> i32 {
         match self {
-            SafeRepoError::SecurityError { .. } => 2,          // Erreur de sécurité critique
-            SafeRepoError::ValidationError { .. } => 3,        // Erreur de validation
-            SafeRepoError::FileNotFound { .. } => 4,           // Fichier non trouvé
-            SafeRepoError::PermissionDenied { .. } => 5,       // Permission refusée
-            SafeRepoError::CliError { .. } => 6,               // Erreur CLI
-            SafeRepoError::DatabaseError { .. } => 7,          // Erreur BD
-            SafeRepoError::ConfigError { .. } => 8,            // Erreur config
-            SafeRepoError::OSVError { .. } => 9,               // Erreur OSV
-            SafeRepoError::ScanError { .. } => 10,             // Erreur scan
-            SafeRepoError::TomlError { .. } => 11,             // Erreur TOML
-            SafeRepoError::IoError { .. } => 1,                // Erreur I/O générale
-            SafeRepoError::Generic { .. } => 1,                // Erreur générique
+            SafeRepoError::SecurityError { .. } => 2, // Erreur de sécurité critique
+            SafeRepoError::ValidationError { .. } => 3, // Erreur de validation
+            SafeRepoError::FileNotFound { .. } => 4,  // Fichier non trouvé
+            SafeRepoError::PermissionDenied { .. } => 5, // Permission refusée
+            SafeRepoError::CliError { .. } => 6,      // Erreur CLI
+            SafeRepoError::DatabaseError { .. } => 7, // Erreur BD
+            SafeRepoError::ConfigError { .. } => 8,   // Erreur config
+            SafeRepoError::OSVError { .. } => 9,      // Erreur OSV
+            SafeRepoError::ScanError { .. } => 10,    // Erreur scan
+            SafeRepoError::TomlError { .. } => 11,    // Erreur TOML
+            SafeRepoError::IoError { .. } => 1,       // Erreur I/O générale
+            SafeRepoError::Generic { .. } => 1,       // Erreur générique
         }
     }
 
