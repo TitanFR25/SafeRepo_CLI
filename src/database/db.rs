@@ -91,18 +91,14 @@ impl VulnerabilityDB {
             reason: format!("Failed to read file for hashing: {}", e),
         })?;
 
-        // Créer le hasher
+        Ok(Self::hash_bytes(&data))
+    }
+
+    fn hash_bytes(data: &[u8]) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(&data);
-
-        // Convertir en hexadecimal
+        hasher.update(data);
         let result = hasher.finalize();
-        let hex_string = result
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>();
-
-        Ok(hex_string)
+        result.iter().map(|b| format!("{:02x}", b)).collect()
     }
 
     // Valide l'intégrité d'un fichier contre un hash connu
@@ -266,24 +262,9 @@ impl VulnerabilityDB {
             if file_path.extension().and_then(|s| s.to_str()) != Some("toml") {
                 continue;
             }
-            // Calculer le hash avant de le parser avec gestion d'erreur
-            let file_hash = match Self::calculate_file_hash(&file_path) {
-                Ok(h) => h,
-                Err(e) => {
-                    eprintln!(
-                        "⚠️ Impossible de calculer hash pour {}: {}",
-                        file_path.display(),
-                        e
-                    );
-                    error_count += 1;
-                    errors_log.push(e.to_string());
-                    continue; // Continuer sans crash
-                }
-            };
-
-            // Lire le contenu du fichier avec gestion d'erreur
-            let content = match fs::read_to_string(&file_path) {
-                Ok(c) => c,
+            // Lire une seule fois le contenu du fichier pour éviter un double I/O
+            let file_bytes = match fs::read(&file_path) {
+                Ok(bytes) => bytes,
                 Err(e) => {
                     let err = SafeRepoError::IoError {
                         context: format!("reading: {}", file_path.display()),
@@ -292,7 +273,22 @@ impl VulnerabilityDB {
                     eprintln!("⚠️ {}", err);
                     error_count += 1;
                     errors_log.push(err.to_string());
-                    continue; // Continuer sans crash
+                    continue;
+                }
+            };
+
+            let file_hash = Self::hash_bytes(&file_bytes);
+            let content = match std::str::from_utf8(&file_bytes) {
+                Ok(c) => c.to_string(),
+                Err(e) => {
+                    let err = SafeRepoError::IoError {
+                        context: format!("decoding UTF-8: {}", file_path.display()),
+                        source: std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+                    };
+                    eprintln!("⚠️ {}", err);
+                    error_count += 1;
+                    errors_log.push(err.to_string());
+                    continue;
                 }
             };
 

@@ -189,6 +189,36 @@ impl Cli {
         self.config.as_ref()
     }
 
+    pub fn validate_scan_path(&self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        let resolved = path.canonicalize()?;
+
+        if !resolved.exists() {
+            return Err(format!("Le chemin '{}' n'existe pas", path.display()).into());
+        }
+
+        if !resolved.is_dir() {
+            return Err(format!("Le chemin '{}' n'est pas un répertoire", path.display()).into());
+        }
+
+        Ok(())
+    }
+
+    pub fn validate_check_path(&self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        let resolved = path.canonicalize()?;
+
+        if !resolved.exists() {
+            return Err(format!("Le fichier '{}' n'existe pas", path.display()).into());
+        }
+
+        if !resolved.is_file() {
+            return Err(
+                format!("Le chemin '{}' n'est pas un fichier valide", path.display()).into(),
+            );
+        }
+
+        Ok(())
+    }
+
     // Execute la commande appropriée
     pub fn execute(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Configurer le logging
@@ -215,6 +245,7 @@ impl Cli {
                 threads: _,
                 output,
             } => {
+                self.validate_scan_path(path)?;
                 self.handle_scan(path, min_severity.as_deref(), output.as_ref())?;
             }
 
@@ -224,6 +255,7 @@ impl Cli {
                 detailed,
                 output,
             } => {
+                self.validate_check_path(file)?;
                 self.handle_check(file, min_severity.as_deref(), *detailed, output.as_ref())?;
             }
 

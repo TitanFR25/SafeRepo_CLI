@@ -1,8 +1,10 @@
 use crate::secure::security::SecurityManager;
 use std::{
+    collections::HashSet,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -32,30 +34,39 @@ const MANIFEST_FILES: &[&str] = &[
     "requirements.txt",
 ];
 
+const ROOT_MARKERS: &[&str] = &[
+    "Cargo.toml",
+    "package.json",
+    "requirements.txt",
+    "go.mod",
+    "pom.xml",
+    "Gemfile",
+    "composer.json",
+    "pubspec.yaml",
+];
+
+fn manifest_files_set() -> &'static HashSet<&'static str> {
+    static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| MANIFEST_FILES.iter().copied().collect())
+}
+
+fn ignored_dirs_set() -> &'static HashSet<&'static str> {
+    static SET: OnceLock<HashSet<&'static str>> = OnceLock::new();
+    SET.get_or_init(|| IGNORED_DIRS.iter().copied().collect())
+}
+
+pub fn is_manifest_file(name: &str) -> bool {
+    manifest_files_set().contains(name)
+}
+
+pub fn is_ignored_dir(name: &str) -> bool {
+    ignored_dirs_set().contains(name)
+}
+
 // 🔍 Vérifie si un répertoire est la racine valide d'un projet
 /// Retourne true si au moins un fichier de projet racine est détecté
 fn is_valid_project_root(path: &Path) -> bool {
-    // Liste des fichiers qui marquent la racine d'un projet
-    let root_markers = vec![
-        "Cargo.toml",       // Rust
-        "package.json",     // Node.js/NPM
-        "requirements.txt", // Python
-        "go.mod",           // Go
-        "pom.xml",          // Java/Maven
-        "Gemfile",          // Ruby
-        "composer.json",    // PHP
-        "pubspec.yaml",     // Dart
-    ];
-
-    // Vérifie si au moin un marker existe dans le répartoire
-    for marker in root_markers {
-        let marker_path = path.join(marker);
-        if marker_path.exists() {
-            return true; // C'est une racine valide
-        }
-    }
-
-    false
+    ROOT_MARKERS.iter().any(|marker| path.join(marker).exists())
 }
 
 // 🏃 Trouve le répertoire racine du projet en remontant l'arborescence
@@ -213,10 +224,10 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &mut SecurityManager) ->
 
             // --- LOGIQUE DE FILTRAGE ---
             // 1. Si c'est un fichier manifeste on accepte
-            let is_manifest = MANIFEST_FILES.contains(&name_str.as_ref());
+            let is_manifest = is_manifest_file(name_str.as_ref());
 
             // 2. Si ce n'est pas un manifeste et que c'est dans la liste IGNORED on passe
-            if !is_manifest && IGNORED_DIRS.contains(&name_str.as_ref()) {
+            if !is_manifest && is_ignored_dir(name_str.as_ref()) {
                 stats.ignored_count += 1;
                 continue;
             }

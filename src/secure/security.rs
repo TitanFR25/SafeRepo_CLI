@@ -1,5 +1,8 @@
 use crate::database::db::{Advisory, VulnerabilityDB};
 use crate::errorhandle::errors::{SafeRepoError, SafeRepoResult};
+use crate::utils::manifest_utils::{
+    file_name_matches, normalize_python_version, normalize_semver, read_manifest_file,
+};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -172,6 +175,285 @@ impl PythonRequirement {
     }
 }
 
+trait ManifestParser {
+    fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>>;
+    fn supported_file_name(&self) -> &'static str;
+}
+
+fn parse_version_candidate(version_str: &str) -> Option<semver::Version> {
+    let cleaned = version_str.trim();
+    let candidate = if semver::Version::parse(cleaned).is_ok() {
+        cleaned.to_string()
+    } else {
+        normalize_semver(cleaned).unwrap_or_else(|| cleaned.to_string())
+    };
+
+    semver::Version::parse(&candidate).ok()
+}
+
+fn parse_python_version(version_str: &str) -> Option<semver::Version> {
+    semver::Version::parse(version_str).ok().or_else(|| {
+        normalize_python_version(version_str)
+            .and_then(|normalized| semver::Version::parse(&normalized).ok())
+    })
+}
+
+struct CargoTomlParser;
+impl ManifestParser for CargoTomlParser {
+    fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>> {
+        let value =
+            toml::from_str::<toml::Value>(content).map_err(|e| SafeRepoError::TomlError {
+                context: format!("parsing {}", self.supported_file_name()),
+                source: e,
+            })?;
+
+        let mut vulnerabilities = Vec::new();
+        if let Some(deps) = value.get("dependencies")
+            && let Some(table) = deps.as_table()
+        {
+            for (name, val) in table.iter() {
+                let version_opt = if val.is_str() {
+                    val.as_str().map(|s| s.to_string())
+                } else if val.is_table() {
+                    val.get("version")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                } else {
+                    None
+                };
+
+                if let Some(ver) = version_opt {
+                    if let Some(version) = parse_version_candidate(&ver) {
+                        let found = db.check_vulnerability(name, &version);
+                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                    }
+                }
+            }
+        }
+
+        if let Some(dev_deps) = value.get("dev-dependencies")
+            && let Some(table) = dev_deps.as_table()
+        {
+            for (name, val) in table.iter() {
+                let version_opt = if val.is_str() {
+                    val.as_str().map(|s| s.to_string())
+                } else if val.is_table() {
+                    val.get("version")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                } else {
+                    None
+                };
+
+                if let Some(ver) = version_opt {
+                    if let Some(version) = parse_version_candidate(&ver) {
+                        let found = db.check_vulnerability(name, &version);
+                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                    }
+                }
+            }
+        }
+
+        Ok(vulnerabilities)
+    }
+
+    fn supported_file_name(&self) -> &'static str {
+        "Cargo.toml"
+    }
+}
+
+struct PackageLockParser;
+impl ManifestParser for PackageLockParser {
+    fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>> {
+        let lock_data: PackageLockJson =
+            serde_json::from_str(content).map_err(|e| SafeRepoError::ValidationError {
+                file_path: self.supported_file_name().to_string(),
+                reason: format!("Invalid JSON in {}: {}", self.supported_file_name(), e),
+            })?;
+
+        let mut vulnerabilities = Vec::new();
+        for (pkg_name, pkg_entry) in &lock_data.packages {
+            if pkg_name.is_empty() || pkg_name == "." {
+                continue;
+            }
+
+            let clean_name = if let Some(pos) = pkg_name.rfind('/') {
+                &pkg_name[pos + 1..]
+            } else {
+                pkg_name
+            };
+
+            if let Ok(version) = semver::Version::parse(&pkg_entry.version) {
+                let found = db.check_vulnerability(clean_name, &version);
+                vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+            }
+
+            if let Some(nested_deps) = &pkg_entry.dependencies {
+                vulnerabilities.extend(Self::process_npm_dependencies(
+                    clean_name,
+                    nested_deps,
+                    db,
+                )?);
+            }
+        }
+
+        vulnerabilities.extend(Self::process_npm_dependencies(
+            "root",
+            &lock_data.dependencies,
+            db,
+        )?);
+        Ok(vulnerabilities)
+    }
+
+    fn supported_file_name(&self) -> &'static str {
+        "package-lock.json"
+    }
+}
+
+impl PackageLockParser {
+    fn process_npm_dependencies(
+        _parent: &str,
+        deps: &std::collections::HashMap<String, PackageLockDep>,
+        db: &VulnerabilityDB,
+    ) -> SafeRepoResult<Vec<Advisory>> {
+        let mut vulnerabilities = Vec::new();
+        for (dep_name, dep) in deps.iter() {
+            if let Some(version_str) = &dep.version {
+                if let Ok(version) = semver::Version::parse(version_str) {
+                    let found = db.check_vulnerability(dep_name, &version);
+                    vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                }
+            }
+
+            if let Some(nested) = &dep.dependencies {
+                vulnerabilities.extend(Self::process_npm_dependencies(dep_name, nested, db)?);
+            }
+        }
+        Ok(vulnerabilities)
+    }
+}
+
+struct CargoLockParser;
+impl ManifestParser for CargoLockParser {
+    fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>> {
+        let lock_data: CargoLock =
+            toml::from_str(content).map_err(|e| SafeRepoError::TomlError {
+                context: format!("parsing {}", self.supported_file_name()),
+                source: e,
+            })?;
+
+        let mut vulnerabilities = Vec::new();
+        for package in &lock_data.packages {
+            if let Ok(version) = semver::Version::parse(&package.version) {
+                let found = db.check_vulnerability(&package.name, &version);
+                vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+            }
+        }
+
+        Ok(vulnerabilities)
+    }
+
+    fn supported_file_name(&self) -> &'static str {
+        "Cargo.lock"
+    }
+}
+
+struct PackageJsonParser;
+impl ManifestParser for PackageJsonParser {
+    fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>> {
+        let value: serde_json::Value =
+            serde_json::from_str(content).map_err(|e| SafeRepoError::ValidationError {
+                file_path: self.supported_file_name().to_string(),
+                reason: format!("Invalid JSON in {}: {}", self.supported_file_name(), e),
+            })?;
+
+        let mut vulnerabilities = Vec::new();
+        let mut process_deps =
+            |map: &serde_json::Map<String, serde_json::Value>| -> SafeRepoResult<()> {
+                for (name, val) in map.iter() {
+                    let version_opt = if val.is_string() {
+                        val.as_str().map(|s| s.to_string())
+                    } else if val.is_object() {
+                        val.get("version")
+                            .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    } else {
+                        None
+                    };
+
+                    if let Some(ver) = version_opt {
+                        if let Some(version) = parse_version_candidate(&ver) {
+                            let found = db.check_vulnerability(name, &version);
+                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                        }
+                    }
+                }
+                Ok(())
+            };
+
+        if let Some(deps) = value.get("dependencies")
+            && let Some(obj) = deps.as_object()
+        {
+            process_deps(obj)?;
+        }
+
+        if let Some(dev) = value.get("devDependencies")
+            && let Some(obj) = dev.as_object()
+        {
+            process_deps(obj)?;
+        }
+
+        Ok(vulnerabilities)
+    }
+
+    fn supported_file_name(&self) -> &'static str {
+        "package.json"
+    }
+}
+
+struct RequirementsParser;
+impl ManifestParser for RequirementsParser {
+    fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>> {
+        let mut vulnerabilities = Vec::new();
+        for line in content.lines() {
+            if let Some(req) = PythonRequirement::parse(line) {
+                if let Some(version_str) = &req.version {
+                    if let Some(version) = parse_python_version(version_str) {
+                        let found = db.check_vulnerability(&req.name, &version);
+                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                    }
+                }
+            }
+        }
+        Ok(vulnerabilities)
+    }
+
+    fn supported_file_name(&self) -> &'static str {
+        "requirements.txt"
+    }
+}
+
+struct GoModParser;
+impl ManifestParser for GoModParser {
+    fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>> {
+        let mut vulnerabilities = Vec::new();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("module ") || trimmed.starts_with("go ") {
+                continue;
+            }
+            if let Some(module) = GoModule::parse(line) {
+                if let Ok(version) = semver::Version::parse(&module.version) {
+                    let found = db.check_vulnerability(&module.name, &version);
+                    vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                }
+            }
+        }
+        Ok(vulnerabilities)
+    }
+
+    fn supported_file_name(&self) -> &'static str {
+        "go.mod"
+    }
+}
+
 // Gère la logique de sécurité et l'orchestration des analyses
 pub struct SecurityManager {
     pub db: VulnerabilityDB,
@@ -213,6 +495,15 @@ impl SecurityManager {
         Self { db }
     }
 
+    fn parse_with_parser<P: ManifestParser>(
+        &mut self,
+        file_path: &Path,
+        parser: &P,
+    ) -> SafeRepoResult<Vec<Advisory>> {
+        let content = read_manifest_file(file_path, parser.supported_file_name())?;
+        parser.parse(&content, &self.db)
+    }
+
     // Point d'entrée principal pour analyser un fichier détecté
     pub fn analyze_file(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         // Vérifier l'extension
@@ -227,9 +518,9 @@ impl SecurityManager {
         // Router vers le parser approprié avec Result
         match extension {
             "lock" => {
-                if file_path.file_name().unwrap_or_default() == "Cargo.lock" {
+                if file_name_matches(file_path, "Cargo.lock") {
                     self.process_cargo_lock(file_path)
-                } else if file_path.file_name().unwrap_or_default() == "package-lock.json" {
+                } else if file_name_matches(file_path, "package-lock.json") {
                     self.process_package_lock(file_path)
                 } else {
                     Err(SafeRepoError::ValidationError {
@@ -239,9 +530,9 @@ impl SecurityManager {
                 }
             }
             "json" => {
-                if file_path.file_name().unwrap_or_default() == "package-lock.json" {
+                if file_name_matches(file_path, "package-lock.json") {
                     self.process_package_lock(file_path)
-                } else if file_path.file_name().unwrap_or_default() == "package.json" {
+                } else if file_name_matches(file_path, "package.json") {
                     self.process_package_json(file_path)
                 } else {
                     Err(SafeRepoError::ValidationError {
@@ -251,7 +542,7 @@ impl SecurityManager {
                 }
             }
             "txt" => {
-                if file_path.file_name().unwrap_or_default() == "requirements.txt" {
+                if file_name_matches(file_path, "requirements.txt") {
                     self.process_requirements_txt(file_path)
                 } else {
                     Err(SafeRepoError::ValidationError {
@@ -261,7 +552,7 @@ impl SecurityManager {
                 }
             }
             "mod" => {
-                if file_path.file_name().unwrap_or_default() == "go.mod" {
+                if file_name_matches(file_path, "go.mod") {
                     self.process_go_mod(file_path)
                 } else {
                     Err(SafeRepoError::ValidationError {
@@ -271,7 +562,7 @@ impl SecurityManager {
                 }
             }
             "toml" => {
-                if file_path.file_name().unwrap_or_default() == "Cargo.toml" {
+                if file_name_matches(file_path, "Cargo.toml") {
                     self.process_cargo_toml(file_path)
                 } else {
                     Err(SafeRepoError::ValidationError {
@@ -289,196 +580,13 @@ impl SecurityManager {
 
     /// Parser Cargo.toml - extraire les dépendances et vérifier les versions
     fn process_cargo_toml(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
-        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
-            context: format!("reading Cargo.toml: {}", file_path.display()),
-            source: e,
-        })?;
-
-        if content.trim().is_empty() {
-            return Err(SafeRepoError::ValidationError {
-                file_path: file_path.display().to_string(),
-                reason: "Cargo.toml est vide".to_string(),
-            });
-        }
-
-        let value =
-            toml::from_str::<toml::Value>(&content).map_err(|e| SafeRepoError::TomlError {
-                context: format!("parsing Cargo.toml: {}", file_path.display()),
-                source: e,
-            })?;
-
-        let mut vulnerabilities = Vec::new();
-
-        // Rechercher les tables [dependencies] et [dev-dependencies]
-        if let Some(deps) = value.get("dependencies")
-            && let Some(table) = deps.as_table()
-        {
-            for (name, val) in table.iter() {
-                // val peut être une table (avec version, path, etc.) ou une string
-                let version_opt = if val.is_str() {
-                    val.as_str().map(|s| s.to_string())
-                } else if val.is_table() {
-                    val.get("version")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                } else {
-                    None
-                };
-
-                if let Some(ver) = version_opt {
-                    // Nettoyer les contraintes courantes (ex: ^1.2.3 -> 1.2.3)
-                    let cleaned = ver.trim();
-                    // Normaliser si nécessaire
-                    let candidate = if semver::Version::parse(cleaned).is_ok() {
-                        cleaned.to_string()
-                    } else {
-                        self.normalize_semver(cleaned)
-                            .unwrap_or_else(|| cleaned.to_string())
-                    };
-                    if let Ok(version) = semver::Version::parse(&candidate) {
-                        let found = self.db.check_vulnerability(name, &version);
-                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                    } else {
-                        eprintln!(
-                            "⚠️ [Cargo.toml] Version non parsable pour {}: {}",
-                            name, ver
-                        );
-                    }
-                } else {
-                    // Pas de version spécifiée - ignorer mais log
-                    eprintln!("ℹ️ [Cargo.toml] Pas de version pour {} - ignoré", name);
-                }
-            }
-        }
-
-        if let Some(dev_deps) = value.get("dev-dependencies")
-            && let Some(table) = dev_deps.as_table()
-        {
-            for (name, val) in table.iter() {
-                let version_opt = if val.is_str() {
-                    val.as_str().map(|s| s.to_string())
-                } else if val.is_table() {
-                    val.get("version")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                } else {
-                    None
-                };
-
-                if let Some(ver) = version_opt {
-                    let cleaned = ver.trim();
-                    let candidate = if semver::Version::parse(cleaned).is_ok() {
-                        cleaned.to_string()
-                    } else {
-                        self.normalize_semver(cleaned)
-                            .unwrap_or_else(|| cleaned.to_string())
-                    };
-                    if let Ok(version) = semver::Version::parse(&candidate) {
-                        let found = self.db.check_vulnerability(name, &version);
-                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                    }
-                }
-            }
-        }
-
-        Ok(vulnerabilities)
+        self.parse_with_parser(file_path, &CargoTomlParser)
     }
 
     // Parser package-lock.json - Parser les dépendances Node.js/NPM
     // Traite les formats NPM v2 (plat) et v3+ (imbriqué)
     fn process_package_lock(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
-        // 1. lire le fichier
-        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
-            context: format!("reading package-lock.json: {}", file_path.display()),
-            source: e,
-        })?;
-
-        // 2. Valider que le fichier n'est pas vide
-        if content.trim().is_empty() {
-            return Err(SafeRepoError::ValidationError {
-                file_path: file_path.display().to_string(),
-                reason: "package-lock.json is empty".to_string(),
-            });
-        }
-
-        // 3. Parse JSON
-        let lock_data: PackageLockJson =
-            serde_json::from_str(&content).map_err(|e| SafeRepoError::ValidationError {
-                file_path: file_path.display().to_string(),
-                reason: format!("Invalid JSON in package-lock.json: {}", e),
-            })?;
-
-        let mut vulnerabilities = Vec::new();
-
-        // 4. Traiter les paquets au niveau racine (format NPM v3+)
-        for (pkg_name, pkg_entry) in &lock_data.packages {
-            // Ignorer le paquet racine (clé = "")
-            if pkg_name.is_empty() || pkg_name == "." {
-                continue;
-            }
-
-            // Extraire le nom du package du chemin (format: "node_modules/nom-package")
-            let clean_name = if let Some(pos) = pkg_name.rfind('/') {
-                &pkg_name[pos + 1..]
-            } else {
-                pkg_name
-            };
-
-            // Valider la version
-            match semver::Version::parse(&pkg_entry.version) {
-                Ok(version) => {
-                    let found = self.db.check_vulnerability(clean_name, &version);
-                    vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                }
-                Err(e) => {
-                    eprintln!(
-                        "⚠️ Version invalide pour {}: {} ({})",
-                        clean_name, pkg_entry.version, e
-                    );
-                }
-            }
-
-            // 5. Traiter les dépendances imbriquées si présentes
-            if let Some(nested_deps) = &pkg_entry.dependencies {
-                vulnerabilities.extend(self.process_npm_dependencies(clean_name, nested_deps)?);
-            }
-        }
-
-        // 6. Traiter les dépendances plates (format NPM v2)
-        vulnerabilities.extend(self.process_npm_dependencies("root", &lock_data.dependencies)?);
-
-        Ok(vulnerabilities)
-    }
-
-    // Fonction helper pour traiter les dépendances NPM imbriquées
-    fn process_npm_dependencies(
-        &mut self,
-        parent: &str,
-        deps: &std::collections::HashMap<String, PackageLockDep>,
-    ) -> SafeRepoResult<Vec<Advisory>> {
-        let mut vulnerabilities = Vec::new();
-
-        for (dep_name, dep) in deps.iter() {
-            if let Some(version_str) = &dep.version {
-                match semver::Version::parse(version_str) {
-                    Ok(version) => {
-                        let found = self.db.check_vulnerability(dep_name, &version);
-                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "⚠️ [{}] Version invalide pour {}: {} ({})",
-                            parent, dep_name, version_str, e
-                        );
-                    }
-                }
-            }
-
-            // Traiter récursivement les dépendances imbriquées
-            if let Some(nested) = &dep.dependencies {
-                vulnerabilities.extend(self.process_npm_dependencies(dep_name, nested)?);
-            }
-        }
-
-        Ok(vulnerabilities)
+        self.parse_with_parser(file_path, &PackageLockParser)
     }
 
     // Valide un fichier Cargo.lock et retourne une erreur si malformé
@@ -511,324 +619,24 @@ impl SecurityManager {
 
     /// Parser Cargo.lock - retourner Result
     fn process_cargo_lock(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
-        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
-            context: format!("reading Cargo.lock: {}", file_path.display()),
-            source: e,
-        })?;
-
-        let lock_data: CargoLock =
-            toml::from_str(&content).map_err(|e| SafeRepoError::TomlError {
-                context: format!("parsing Cargo.lock: {}", file_path.display()),
-                source: e,
-            })?;
-
-        let mut vulnerabilities = Vec::new();
-
-        // Itérer sans panic - continuer même si une dépendance est invalide
-        for package in &lock_data.packages {
-            match semver::Version::parse(&package.version) {
-                Ok(version) => {
-                    let found = self.db.check_vulnerability(&package.name, &version);
-                    vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                }
-                Err(e) => {
-                    // Logger et continuer
-                    eprintln!(
-                        "⚠️ Invalid version for {}: {} ({})",
-                        package.name, package.version, e
-                    );
-                }
-            }
-        }
-
-        Ok(vulnerabilities)
+        self.parse_with_parser(file_path, &CargoLockParser)
     }
 
     /// Parser package.json - retourner Result
-    fn process_package_json(&mut self, _file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
-        let file_path = _file_path;
-        // 1. Lire le fichier
-        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
-            context: format!("reading package.json: {}", file_path.display()),
-            source: e,
-        })?;
-
-        if content.trim().is_empty() {
-            return Err(SafeRepoError::ValidationError {
-                file_path: file_path.display().to_string(),
-                reason: "package.json is empty".to_string(),
-            });
-        }
-
-        // 2. Parser JSON
-        let v: serde_json::Value =
-            serde_json::from_str(&content).map_err(|e| SafeRepoError::ValidationError {
-                file_path: file_path.display().to_string(),
-                reason: format!("Invalid JSON in package.json: {}", e),
-            })?;
-
-        let mut vulnerabilities = Vec::new();
-
-        // Helper to process a dependency map
-        let mut process_deps =
-            |map: &serde_json::Map<String, serde_json::Value>| -> SafeRepoResult<()> {
-                for (name, val) in map.iter() {
-                    // val peut être une string ou un objet
-                    let version_opt = if val.is_string() {
-                        val.as_str().map(|s| s.to_string())
-                    } else if val.is_object() {
-                        val.get("version")
-                            .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    } else {
-                        None
-                    };
-
-                    if let Some(ver) = version_opt {
-                        let cleaned = ver.trim();
-                        let candidate = if semver::Version::parse(cleaned).is_ok() {
-                            cleaned.to_string()
-                        } else {
-                            self.normalize_semver(cleaned)
-                                .unwrap_or_else(|| cleaned.to_string())
-                        };
-
-                        if let Ok(version) = semver::Version::parse(&candidate) {
-                            let found = self.db.check_vulnerability(name, &version);
-                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                        } else {
-                            eprintln!(
-                                "⚠️ [package.json] Version non parsable pour {}: {}",
-                                name, ver
-                            );
-                        }
-                    } else {
-                        eprintln!("ℹ️ [package.json] Pas de version pour {} - ignoré", name);
-                    }
-                }
-                Ok(())
-            };
-
-        // dependencies
-        if let Some(deps) = v.get("dependencies")
-            && let Some(obj) = deps.as_object()
-        {
-            process_deps(obj)?;
-        }
-
-        // devDependencies
-        if let Some(dev) = v.get("devDependencies")
-            && let Some(obj) = dev.as_object()
-        {
-            process_deps(obj)?;
-        }
-
-        Ok(vulnerabilities)
+    fn process_package_json(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
+        self.parse_with_parser(file_path, &PackageJsonParser)
     }
 
     /// Parser requirements.txt - Parser les dépendances Python/PIP
     /// Support de multiples formats et contraintes
     fn process_requirements_txt(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
-        // 1. Lire le fichier
-        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
-            context: format!("lecture de requirements.txt: {}", file_path.display()),
-            source: e,
-        })?;
-
-        // 2. Valider que le fichier n'est pas vide
-        if content.trim().is_empty() {
-            return Err(SafeRepoError::ValidationError {
-                file_path: file_path.display().to_string(),
-                reason: "requirements.txt est vide".to_string(),
-            });
-        }
-
-        let mut vulnerabilities = Vec::new();
-        let mut line_count = 0;
-
-        // 3. Traiter chaque ligne
-        for (line_num, line) in content.lines().enumerate() {
-            line_count += 1;
-
-            // Parser la dépendance
-            match PythonRequirement::parse(line) {
-                Some(req) => {
-                    // Si une version est spécifiée, vérifier les vulnérabilités
-                    if let Some(version_str) = &req.version {
-                        // Python utilise des schémas de version différents du semver
-                        // Essayer de convertir au format semver
-                        match semver::Version::parse(version_str) {
-                            Ok(version) => {
-                                let found = self.db.check_vulnerability(&req.name, &version);
-                                vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                            }
-                            Err(_) => {
-                                // Essayer de normaliser la version Python vers semver
-                                // Format: 1.2.3 ou 1.2.3.post1 ou 1.2.3rc1
-                                if let Some(normalized) = self.normalize_python_version(version_str)
-                                {
-                                    match semver::Version::parse(&normalized) {
-                                        Ok(version) => {
-                                            let found =
-                                                self.db.check_vulnerability(&req.name, &version);
-                                            vulnerabilities
-                                                .extend(found.iter().map(|&adv| adv.clone()));
-                                        }
-                                        Err(e) => {
-                                            eprintln!(
-                                                "⚠️ [requirements.txt:{}] Impossible de parser la version '{}' pour {}: {}",
-                                                line_num + 1,
-                                                version_str,
-                                                req.name,
-                                                e
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // Pas de version spécifiée - log comme info
-                        eprintln!(
-                            "ℹ️ [requirements.txt:{}] Pas de version spécifiée pour {} - vérification de version ignorée",
-                            line_num + 1,
-                            req.name
-                        );
-                    }
-                }
-                None => {
-                    // Ignorer (commentaires, URLs git, etc.)
-                }
-            }
-        }
-
-        eprintln!("✅ {} lignes traitées depuis requirements.txt", line_count);
-
-        Ok(vulnerabilities)
-    }
-
-    /// Normaliser les chaînes de version Python au format de versioning sémantique
-    /// Convertit: 1.2.3.post1 → 1.2.3-post1
-    /// Convertit: 1.2.3rc1 → 1.2.3-rc1
-    /// Convertit: 1.2 → 1.2.0
-    fn normalize_python_version(&self, version_str: &str) -> Option<String> {
-        // Supprimer les espaces
-        let version = version_str.trim();
-
-        // Gérer les suffixes .devN et .postN
-        let normalized = version
-            .replace(".dev", "-dev")
-            .replace(".post", "-post")
-            .replace("rc", "-rc")
-            .replace("a", "-a")
-            .replace("b", "-b");
-
-        // S'assurer que nous avons au moins 3 parties de version (x.y.z)
-        let parts: Vec<&str> = normalized.split('.').collect();
-        if parts.len() < 3 {
-            // Compléter avec des zéros
-            let mut padded = parts.join(".");
-            while padded.matches('.').count() < 2 {
-                padded.push_str(".0");
-            }
-            Some(padded)
-        } else {
-            Some(normalized)
-        }
-    }
-
-    /// Tente de normaliser une chaîne de version simple en semver x.y.z
-    /// Ex: "1" -> "1.0.0", "1.2" -> "1.2.0"
-    fn normalize_semver(&self, version_str: &str) -> Option<String> {
-        let mut s = version_str.trim().to_string();
-        // retirer operators courants
-        s = s
-            .trim_start_matches('^')
-            .trim_start_matches('~')
-            .to_string();
-        // retirer espaces
-        s = s.trim().to_string();
-
-        // If already has 2 dots, return
-        if s.matches('.').count() >= 2 {
-            return Some(s);
-        }
-
-        // Append .0 until we have 3 parts
-        while s.matches('.').count() < 2 {
-            s.push_str(".0");
-        }
-
-        Some(s)
+        self.parse_with_parser(file_path, &RequirementsParser)
     }
 
     /// Parser go.mod - Parser les dépendances Go modules
     /// Traite les directives require et replace
     fn process_go_mod(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
-        // 1. Lire le fichier
-        let content = std::fs::read_to_string(file_path).map_err(|e| SafeRepoError::IoError {
-            context: format!("lecture de go.mod: {}", file_path.display()),
-            source: e,
-        })?;
-
-        // 2. Valider que le fichier n'est pas vide
-        if content.trim().is_empty() {
-            return Err(SafeRepoError::ValidationError {
-                file_path: file_path.display().to_string(),
-                reason: "go.mod est vide".to_string(),
-            });
-        }
-
-        // 3. Vérifier que c'est un vrai fichier go.mod
-        if !content.starts_with("module ") {
-            return Err(SafeRepoError::ValidationError {
-                file_path: file_path.display().to_string(),
-                reason: "fichier go.mod invalide: doit commencer par 'module'".to_string(),
-            });
-        }
-
-        let mut vulnerabilities = Vec::new();
-        let mut line_count = 0;
-
-        // 4. Traiter chaque ligne
-        for (line_num, line) in content.lines().enumerate() {
-            let trimmed = line.trim();
-
-            // Ignorer les blocs module et go version
-            if trimmed.starts_with("module ") || trimmed.starts_with("go ") {
-                continue;
-            }
-
-            // Parser le module
-            match GoModule::parse(line) {
-                Some(module) => {
-                    line_count += 1;
-
-                    // Parser la version Go (format: v1.2.3)
-                    match semver::Version::parse(&module.version) {
-                        Ok(version) => {
-                            let found = self.db.check_vulnerability(&module.name, &version);
-                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "⚠️ [go.mod:{}] Version invalide pour {}: {} ({})",
-                                line_num + 1,
-                                module.name,
-                                module.version,
-                                e
-                            );
-                        }
-                    }
-                }
-                None => {
-                    // Ignorer (commentaires, directives, etc.)
-                }
-            }
-        }
-
-        eprintln!("✅ {} modules Go traités depuis go.mod", line_count);
-
-        Ok(vulnerabilities)
+        self.parse_with_parser(file_path, &GoModParser)
     }
 
     // Affiche une alerte formatée pour le développeur

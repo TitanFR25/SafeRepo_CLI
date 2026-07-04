@@ -9,3 +9,4 @@ pub mod errorhandle;
 pub mod osv;
 pub mod scaning;
 pub mod secure;
+pub mod utils;

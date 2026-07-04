@@ -2,7 +2,60 @@
 #[cfg(test)]
 mod tests_cli_complete {
     use SafeRepo_CLI::command::cli::{Cli, Commands};
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
+
+    #[test]
+    fn test_cli_validate_scan_path_accepts_existing_directory() {
+        let cli = Cli {
+            command: Commands::Scan {
+                path: PathBuf::from("."),
+                min_severity: None,
+                exclude: None,
+                skip_code_scan: false,
+                threads: None,
+                output: None,
+            },
+            verbose: false,
+            log_level: None,
+            set_config: None,
+            json: false,
+            config: None,
+        };
+
+        let temp_dir =
+            std::env::temp_dir().join(format!("saferepo-cli-test-{}", std::process::id()));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let result = cli.validate_scan_path(&temp_dir);
+
+        assert!(result.is_ok());
+        fs::remove_dir_all(temp_dir).unwrap();
+    }
+
+    #[test]
+    fn test_cli_validate_scan_path_rejects_missing_directory() {
+        let cli = Cli {
+            command: Commands::Scan {
+                path: PathBuf::from("."),
+                min_severity: None,
+                exclude: None,
+                skip_code_scan: false,
+                threads: None,
+                output: None,
+            },
+            verbose: false,
+            log_level: None,
+            set_config: None,
+            json: false,
+            config: None,
+        };
+
+        let missing_path =
+            std::env::temp_dir().join(format!("saferepo-missing-{}", std::process::id()));
+        let result = cli.validate_scan_path(&missing_path);
+
+        assert!(result.is_err());
+    }
 
     // TEST 1: Parse Scan Command
     // Objectif: Vérifier que la commande Scan est parsée correctement
