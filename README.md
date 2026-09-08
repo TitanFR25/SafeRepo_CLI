@@ -8,16 +8,16 @@
 
 ### 📋 Aperçu
 
-**SafeRepo CLI** est un scanner de vulnérabilités multi-langage haute performance conçu pour détecter les dépendances vulnérables dans vos projets. Développé en Rust, il offre une analyse rapide et fiable des manifestes de dépendances.
+**SafeRepo CLI** est un scanner de vulnérabilités multi-langage conçu pour détecter les dépendances vulnérables dans vos projets. Développé en Rust, il analyse les manifestes de dépendances avec des limites de ressources explicites.
 
 ### ✨ Fonctionnalités
 
-- ✅ **Multi-langage** : Support complet Rust, Node.js/NPM, Python, Go
-- ✅ **Haute performance** : Écrit en Rust pour une vitesse maximale
-- ✅ **Sécurisé** : Zéro panic, gestion complète des erreurs
-- ✅ **Intégrité DB** : Vérification SHA-256 de tous les fichiers de vulnérabilités
+- ✅ **Multi-langage** : Analyse Cargo, NPM, Python et Go selon les formats documentés
+- ✅ **Limites de ressources** : Taille des manifestes et profondeur de parcours bornées
+- ✅ **Gestion d'erreurs** : Les erreurs de scan sont retournées avec leur contexte
+- ✅ **Intégrité DB** : Manifeste et signature Ed25519 requis pour une base locale
 - ✅ **Path Traversal Protection** : Validation stricte des chemins avec `canonicalize()`
-- ✅ **Tests Complets** : 43 tests unitaires et d'intégration
+- ✅ **Tests automatisés** : Tests unitaires et d'intégration pour les comportements critiques
 - ✅ **Symlinks Support** : Ignoration sécurisée des liens symboliques
 
 ### 📦 Parseurs Supportés
@@ -25,7 +25,9 @@
 | Langage        | Fichier Manifeste   | Statut    | Format          |
 | -------------- | ------------------- | --------- | --------------- |
 | 🦀 Rust        | `Cargo.lock`        | ✅ Stable | TOML            |
+| 🦀 Rust        | `Cargo.toml`        | ✅ Stable | TOML            |
 | 📦 Node.js/NPM | `package-lock.json` | ✅ Stable | JSON            |
+| 📦 Node.js/NPM | `package.json`      | ✅ Stable | JSON            |
 | 🐍 Python      | `requirements.txt`  | ✅ Stable | TXT             |
 | 🔵 Go          | `go.mod`            | ✅ Stable | Require/Replace |
 
@@ -45,7 +47,7 @@ cargo install saferepo
 
 #### Prérequis
 
-- **Rust** 1.70+ ([installer Rust](https://rustup.rs/))
+- **Rust** 1.85+ ([installer Rust](https://rustup.rs/))
 - **Cargo** (livré avec Rust)
 - **Droits administrateur** (pour les symlinks sur Windows)
 
@@ -76,9 +78,31 @@ Le scanner détecte automatiquement la racine valide du projet en cherchant les 
 
 Pour optimiser les performances, ces dossiers sont automatiquement ignorés :
 
+```text
+.git, node_modules, target, build, dist, vendor, .cache, vulnera_db
 ```
-.git, node_modules, target, build, dist, vendor, .cache
+
+`vulnera_db` est exclu du parcours du projet, mais il est chargé séparément
+comme base de référence des advisories.
+
+### 🖥️ Utilisation CLI
+
+```bash
+# Afficher l'aide
+cargo run --release -- --help
+
+# Scanner le répertoire courant
+cargo run --release -- scan .
+
+# Vérifier un manifeste précis
+cargo run --release -- check Cargo.lock
+
+# Afficher la configuration
+cargo run --release -- config --show-path
 ```
+
+La commande `scan` charge d'abord la base locale, puis parcourt le projet.
+Avec un corpus très volumineux, le chargement de la base peut prendre du temps.
 
 ### 🧪 Tests
 
@@ -94,14 +118,7 @@ cargo test test_parse_package_lock_json_valide
 cargo test -- --nocapture
 ```
 
-**Couverture de Tests:**
-
-- ✅ 43 tests au total
-- ✅ 6 tests d'intégration
-- ✅ 16 tests base de données
-- ✅ 5 tests gestion d'erreurs
-- ✅ 10 tests scanner
-- ✅ 9 tests analyse de sécurité
+La suite couvre notamment les limites de scan, les parseurs supportés, la DB signée et les sorties CLI JSON. Les seuils de couverture ne sont pas encore publiés.
 
 ### 🔧 Développement
 
@@ -128,20 +145,21 @@ cargo check
 Les fichiers de vulnérabilités doivent être au format TOML avec la structure suivante :
 
 ```toml
-[[vulnerability]]
+[advisory]
 id = "CVE-2024-12345"
-title = "Critical RCE in library X"
-description = "Remote Code Execution vulnerability in package X versions < 1.5.0"
+package = "library-x"
 severity = "critical"
-affected_versions = ["0.1.0", "0.2.0", "1.0.0", "1.4.9"]
+title = "Critical issue in library X"
+description = "Describe the affected package and remediation."
 
-[[vulnerability]]
-id = "CVE-2024-12346"
-title = "XSS in template engine"
-description = "Cross-site scripting in template rendering"
-severity = "high"
-affected_versions = ["2.0.0", "2.1.0"]
+[versions]
+patched = ["1.5.0"]
 ```
+
+Une base destinée à une release doit contenir uniquement des fichiers valides,
+être accompagnée de `.integrity_manifest` et de
+`.integrity_manifest.sig`, puis être signée avec la clé privée de release.
+La clé privée ne doit jamais être ajoutée au dépôt.
 
 ### 📄 Licence
 
@@ -157,12 +175,12 @@ Distribué sous licence MIT. Voir [LICENSE](LICENSE) pour plus de détails.
 
 ### ✨ Features
 
-- ✅ **Multi-language** : Full support for Rust, Node.js/NPM, Python, Go
-- ✅ **High Performance** : Written in Rust for maximum speed
-- ✅ **Secure** : Zero panics, complete error handling
-- ✅ **Database Integrity** : SHA-256 verification for all vulnerability files
+- ✅ **Multi-language** : Cargo, NPM, Python, and Go analysis for documented formats
+- ✅ **Resource limits** : Manifest size and traversal depth are bounded
+- ✅ **Error handling** : Scan errors are returned with context
+- ✅ **Database integrity** : An Ed25519-signed manifest is required for a local database
 - ✅ **Path Traversal Protection** : Strict path validation with `canonicalize()`
-- ✅ **Complete Tests** : 43 unit and integration tests
+- ✅ **Automated tests** : Unit and integration coverage for critical behavior
 - ✅ **Symlinks Support** : Safe handling of symbolic links
 
 ### 📦 Supported Parsers
@@ -190,7 +208,7 @@ cargo install saferepo
 
 #### Prerequisites
 
-- **Rust** ([Install Rust](https://rustup.rs/))
+- **Rust 1.85+** ([Install Rust](https://rustup.rs/))
 - **Cargo** (included with Rust)
 - **Administrator rights** (for symlinks on Windows)
 
@@ -218,9 +236,31 @@ Scanner automatically detects valid project root by searching for markers:
 
 For performance optimization, these directories are automatically ignored:
 
+```text
+.git, node_modules, target, build, dist, vendor, .cache, vulnera_db
 ```
-.git, node_modules, target, build, dist, vendor, .cache
+
+`vulnera_db` is excluded from project traversal but loaded separately as the
+reference advisory database.
+
+### 🖥️ CLI Usage
+
+```bash
+# Show help
+cargo run --release -- --help
+
+# Scan the current directory
+cargo run --release -- scan .
+
+# Check one manifest
+cargo run --release -- check Cargo.lock
+
+# Show the active configuration path
+cargo run --release -- config --show-path
 ```
+
+The `scan` command loads the local database before traversing the project. A
+very large advisory corpus can therefore take time to load.
 
 ### 🧪 Testing
 
@@ -236,14 +276,7 @@ cargo test test_parse_package_lock_json_valide
 cargo test -- --nocapture
 ```
 
-**Test Coverage:**
-
-- ✅ 43 total tests
-- ✅ 6 integration tests
-- ✅ 16 database tests
-- ✅ 5 error handling tests
-- ✅ 10 scanner tests
-- ✅ 9 security analysis tests
+The suite covers scan limits, supported parsers, signed databases, and JSON CLI output. Coverage thresholds are not yet published.
 
 ### 🔧 Development
 
@@ -271,20 +304,36 @@ cargo check
 Vulnerability files must be in TOML format with the following structure:
 
 ```toml
-[[vulnerability]]
+[advisory]
 id = "CVE-2024-12345"
-title = "Critical RCE in library X"
-description = "Remote Code Execution vulnerability in package X versions < 1.5.0"
+package = "library-x"
 severity = "critical"
-affected_versions = ["0.1.0", "0.2.0", "1.0.0", "1.4.9"]
+title = "Critical issue in library X"
+description = "Describe the affected package and remediation."
 
-[[vulnerability]]
-id = "CVE-2024-12346"
-title = "XSS in template engine"
-description = "Cross-site scripting in template rendering"
-severity = "high"
-affected_versions = ["2.0.0", "2.1.0"]
+[versions]
+patched = ["1.5.0"]
 ```
+
+A release database must contain only valid advisory files and include
+`.integrity_manifest` and `.integrity_manifest.sig` generated and signed with
+the release private key. The private key must never be committed.
+
+#### Préparer et signer une base
+
+Le dépôt fournit un outil de préparation qui valide chaque fichier TOML,
+refuse les fichiers trop volumineux, écrit un manifeste déterministe et retire
+une signature devenue obsolète :
+
+```bash
+cargo run --release --bin saferepo-prepare-database -- vulnera_db
+cargo run --release --bin saferepo-sign-manifest -- C:\chemin\hors depot\saferepo-release.key vulnera_db
+```
+
+La clé publique correspondant à la clé privée doit être intégrée dans
+`src/database/db.rs`. Après la signature, ne modifiez plus aucun fichier TOML
+ni le manifeste. Vérifiez ensuite avec `cargo run --release -- scan .` et
+publiez uniquement les fichiers de base, le manifeste et sa signature.
 
 ### 📄 License
 
@@ -292,4 +341,4 @@ Distributed under MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 
-**Made with ❤️ in Rust** | **v0.6.0** | **Last Updated: May 2026**
+**Made with Rust** | **v0.6.9** | **Last Updated: 2026-09-08**

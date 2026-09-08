@@ -2,8 +2,11 @@
 #[cfg(test)]
 mod tests_cli_complete {
     use SafeRepo_CLI::command::cli::{Cli, Commands};
-    use std::{fs, path::PathBuf};
+    use clap::Parser;
+    use std::{fs, path::PathBuf, process::Command};
 
+    // TEST 1: Validation d'un répertoire existant
+    // Objectif: Vérifier qu'un chemin de scan existant est accepté
     #[test]
     fn test_cli_validate_scan_path_accepts_existing_directory() {
         let cli = Cli {
@@ -32,6 +35,8 @@ mod tests_cli_complete {
         fs::remove_dir_all(temp_dir).unwrap();
     }
 
+    // TEST 2: Rejet d'un répertoire absent
+    // Objectif: Vérifier qu'un chemin de scan inexistant est refusé
     #[test]
     fn test_cli_validate_scan_path_rejects_missing_directory() {
         let cli = Cli {
@@ -57,7 +62,80 @@ mod tests_cli_complete {
         assert!(result.is_err());
     }
 
-    // TEST 1: Parse Scan Command
+    // TEST 3: Parsing des arguments de scan avec Clap
+    // Objectif: Vérifier que les options principales de scan sont parsées correctement
+    #[test]
+    fn test_cli_parses_scan_arguments_with_clap() {
+        let cli = Cli::try_parse_from([
+            "saferepo",
+            "--json",
+            "--verbose",
+            "scan",
+            "project",
+            "--min-severity",
+            "high",
+            "--exclude",
+            "target",
+            "--threads",
+            "4",
+            "--output",
+            "report.json",
+        ])
+        .expect("les arguments CLI doivent être parsés");
+
+        assert!(cli.json);
+        assert!(cli.verbose);
+        match cli.command {
+            Commands::Scan {
+                path,
+                min_severity,
+                exclude,
+                threads,
+                output,
+                ..
+            } => {
+                assert_eq!(path, PathBuf::from("project"));
+                assert_eq!(min_severity.as_deref(), Some("high"));
+                assert_eq!(exclude, Some(vec!["target".to_string()]));
+                assert_eq!(threads, Some(4));
+                assert_eq!(output, Some(PathBuf::from("report.json")));
+            }
+            _ => panic!("la commande scan était attendue"),
+        }
+    }
+
+    // TEST 4: Affichage de l'aide CLI
+    // Objectif: Vérifier que la commande d'aide s'exécute correctement
+    #[test]
+    fn test_cli_process_help_succeeds() {
+        let output = Command::new(env!("CARGO_BIN_EXE_SafeRepo_CLI"))
+            .arg("--help")
+            .output()
+            .expect("Impossible d'exécuter SafeRepo_CLI");
+
+        assert!(output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("Usage:"));
+        assert!(stdout.contains("scan"));
+        assert!(stdout.contains("update"));
+    }
+
+    // TEST 5: Commande absente
+    // Objectif: Documenter le code et le message retournes quand aucune commande n'est fournie
+    #[test]
+    fn test_cli_without_command_reports_usage_error() {
+        let output = Command::new(env!("CARGO_BIN_EXE_SafeRepo_CLI"))
+            .output()
+            .expect("Impossible d'exécuter SafeRepo_CLI");
+
+        assert_eq!(output.status.code(), Some(2));
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("Usage:"));
+        assert!(stderr.contains("<COMMAND>"));
+        assert!(stderr.contains("scan"));
+    }
+
+    // TEST 6: Parse Scan Command
     // Objectif: Vérifier que la commande Scan est parsée correctement
     #[test]
     fn test_cli_parse_scan_command() {
@@ -86,7 +164,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 2: Scan avec chemin absolu
+    // TEST 6: Scan avec chemin absolu
     // Objectif: Vérifier que les chemins absolus sont acceptés
     #[test]
     fn test_cli_scan_with_absolute_path() {
@@ -115,7 +193,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 3: Scan avec chemin relatif
+    // TEST 7: Scan avec chemin relatif
     // Objectif: Vérifier que les chemins relatifs sont acceptés
     #[test]
     fn test_cli_scan_with_relative_path() {
@@ -144,7 +222,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 4: Scan avec sévérité critique
+    // TEST 8: Scan avec sévérité critique
     // Objectif: Vérifier que le paramètre critical est accepté
     #[test]
     fn test_cli_scan_with_critical_severity() {
@@ -173,7 +251,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 5: Scan avec sévérité haute
+    // TEST 9: Scan avec sévérité haute
     // Objectif: Vérifier que le paramètre high est accepté
     #[test]
     fn test_cli_scan_with_high_severity() {
@@ -202,7 +280,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 6: Scan avec sévérité moyenne
+    // TEST 10: Scan avec sévérité moyenne
     // Objectif: Vérifier que le paramètre medium est accepté
     #[test]
     fn test_cli_scan_with_medium_severity() {
@@ -231,7 +309,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 7: Scan avec sévérité basse
+    // TEST 11: Scan avec sévérité basse
     // Objectif: Vérifier que le paramètre low est accepté
     #[test]
     fn test_cli_scan_with_low_severity() {
@@ -260,7 +338,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 8: Scan avec une seule exclusion
+    // TEST 12: Scan avec une seule exclusion
     // Objectif: Vérifier que l'exclusion simple fonctionne
     #[test]
     fn test_cli_scan_with_single_exclude() {
@@ -290,7 +368,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 9: Scan avec multiples exclusions
+    // TEST 13: Scan avec multiples exclusions
     // Objectif: Vérifier que plusieurs exclusions fonctionnent
     #[test]
     fn test_cli_scan_with_multiple_excludes() {
@@ -331,7 +409,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 10: Scan avec wildcard d'exclusion
+    // TEST 14: Scan avec wildcard d'exclusion
     // Objectif: Vérifier que les patterns wildcard d'exclusion sont supportés
     #[test]
     fn test_cli_scan_with_wildcard_exclude() {
@@ -361,7 +439,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 11: Scan avec un seul thread
+    // TEST 15: Scan avec un seul thread
     // Objectif: Vérifier que le paramètre threads=1 fonctionne
     #[test]
     fn test_cli_scan_with_single_thread() {
@@ -390,7 +468,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 12: Scan avec multiples threads
+    // TEST 16: Scan avec multiples threads
     // Objectif: Vérifier que les multiples threads sont acceptés
     #[test]
     fn test_cli_scan_with_multiple_threads() {
@@ -420,7 +498,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 13: Scan avec threads excessifs
+    // TEST 17: Scan avec threads excessifs
     // Objectif: Vérifier que les nombres élevés de threads sont acceptés
     #[test]
     fn test_cli_scan_with_excessive_threads() {
@@ -450,7 +528,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 14: Skip code scan - faux
+    // TEST 18: Skip code scan - faux
     // Objectif: Vérifier que skip_code_scan=false est reconnu
     #[test]
     fn test_cli_scan_skip_code_scan_false() {
@@ -479,7 +557,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 15: Skip code scan - vrai
+    // TEST 19: Skip code scan - vrai
     // Objectif: Vérifier que skip_code_scan=true est reconnu
     #[test]
     fn test_cli_scan_skip_code_scan_true() {
@@ -508,7 +586,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 16: Option verbose activée
+    // TEST 20: Option verbose activée
     // Objectif: Vérifier que verbose=true régle le log level à debug
     #[test]
     fn test_cli_verbose_option() {
@@ -533,7 +611,7 @@ mod tests_cli_complete {
         assert_eq!(cli.get_log_level(), "debug");
     }
 
-    // TEST 17: Option verbose désactivée
+    // TEST 21: Option verbose désactivée
     // Objectif: Vérifier que verbose=false régle le log level à info
     #[test]
     fn test_cli_verbose_false() {
@@ -558,7 +636,7 @@ mod tests_cli_complete {
         assert_eq!(cli.get_log_level(), "info");
     }
 
-    // TEST 18: Log level custom override verbose
+    // TEST 22: Log level custom override verbose
     // Objectif: Vérifier qu'un log_level explicite override verbose
     #[test]
     fn test_cli_custom_log_level_overrides_verbose() {
@@ -581,7 +659,7 @@ mod tests_cli_complete {
         assert_eq!(cli.get_log_level(), "trace");
     }
 
-    // TEST 19: Log level toutes les variantes
+    // TEST 23: Log level toutes les variantes
     // Objectif: Vérifier que tous les log levels (trace, debug, info, warn, error) fonctionnent
     #[test]
     fn test_cli_log_level_all_variants() {
@@ -607,7 +685,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 20: JSON output flag vrai
+    // TEST 24: JSON output flag vrai
     // Objectif: Vérifier que json=true est reconnu
     #[test]
     fn test_cli_json_output_flag_true() {
@@ -631,7 +709,7 @@ mod tests_cli_complete {
         assert!(cli.is_json_output());
     }
 
-    // TEST 21: JSON output flag faux
+    // TEST 25: JSON output flag faux
     // Objectif: Vérifier que json=false est reconnu
     #[test]
     fn test_cli_json_output_flag_false() {
@@ -655,7 +733,7 @@ mod tests_cli_complete {
         assert!(!cli.is_json_output());
     }
 
-    // TEST 22: Commande Check avec toutes les options
+    // TEST 26: Commande Check avec toutes les options
     // Objectif: Vérifier que la commande Check parse correctement tous les paramètres
     #[test]
     fn test_cli_check_command() {
@@ -689,7 +767,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 23: Commande Check minimaliste
+    // TEST 27: Commande Check minimaliste
     // Objectif: Vérifier que Check fonctionne sans options optionnelles
     #[test]
     fn test_cli_check_command_minimal() {
@@ -724,7 +802,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 24: Commande Update avec toutes les options
+    // TEST 28: Commande Update avec toutes les options
     // Objectif: Vérifier que Update parse correctement force, source et vérification
     #[test]
     fn test_cli_update_command_with_all_options() {
@@ -759,7 +837,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 25: Commande Update avec source GitHub
+    // TEST 29: Commande Update avec source GitHub
     // Objectif: Vérifier que source=github est accepté
     #[test]
     fn test_cli_update_command_github_source() {
@@ -786,7 +864,20 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 26: Commande Update avec source Snyk
+    // TEST 30: Validation de l'hôte du bundle GitHub
+    // Objectif: Vérifier qu'une URL de bundle hors GitHub est refusée
+    #[test]
+    fn test_github_bundle_url_requires_github_host() {
+        assert!(
+            Cli::validate_github_bundle_url(
+                "https://raw.githubusercontent.com/example/repo/main/db"
+            )
+            .is_ok()
+        );
+        assert!(Cli::validate_github_bundle_url("https://example.invalid/db").is_err());
+    }
+
+    // TEST 31: Commande Update avec source Snyk
     // Objectif: Vérifier que source=snyk est accepté
     #[test]
     fn test_cli_update_command_snyk_source() {
@@ -813,7 +904,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 27: Commande Config afficher le chemin
+    // TEST 32: Commande Config afficher le chemin
     // Objectif: Vérifier que Config show_path=true fonctionne
     #[test]
     fn test_cli_config_command_show_path() {
@@ -839,7 +930,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 28: Commande Config réinitialiser
+    // TEST 33: Commande Config réinitialiser
     // Objectif: Vérifier que Config reset=true fonctionne
     #[test]
     fn test_cli_config_command_reset() {
@@ -865,7 +956,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 29: Commande Stats complète
+    // TEST 34: Commande Stats complète
     // Objectif: Vérifier que Stats avec toutes les options fonctionne
     #[test]
     fn test_cli_stats_command_full() {
@@ -897,7 +988,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 30: Commande Stats minimaliste
+    // TEST 35: Commande Stats minimaliste
     // Objectif: Vérifier que Stats fonctionne sans paramètres optionnels
     #[test]
     fn test_cli_stats_command_minimal() {
@@ -929,7 +1020,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 31: Commande Stats avec jours custom
+    // TEST 36: Commande Stats avec jours custom
     // Objectif: Vérifier que Stats accepte différentes valeurs de days
     #[test]
     fn test_cli_stats_with_custom_days() {
@@ -955,7 +1046,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 32: Chemin de config custom
+    // TEST 37: Chemin de config custom
     // Objectif: Vérifier que le chemin de config custom est respecté
     #[test]
     fn test_cli_custom_config_path() {
@@ -980,7 +1071,7 @@ mod tests_cli_complete {
         assert_eq!(cli.get_config_path(), Some(&config_path));
     }
 
-    // TEST 33: Chemin de config absent
+    // TEST 38: Chemin de config absent
     // Objectif: Vérifier que config=None est géré correctement
     #[test]
     fn test_cli_config_path_none() {
@@ -1004,7 +1095,7 @@ mod tests_cli_complete {
         assert_eq!(cli.get_config_path(), None);
     }
 
-    // TEST 34: Scan avec toutes les options combinées
+    // TEST 39: Scan avec toutes les options combinées
     // Objectif: Vérifier que tous les paramètres peuvent être utilisés ensemble
     #[test]
     fn test_cli_scan_all_options_combined() {
@@ -1052,7 +1143,7 @@ mod tests_cli_complete {
         );
     }
 
-    // TEST 35: Verbose et JSON output combinés
+    // TEST 40: Verbose et JSON output combinés
     // Objectif: Vérifier que verbose et json peuvent être utilisés ensemble
     #[test]
     fn test_cli_verbose_with_json_output() {
@@ -1078,7 +1169,7 @@ mod tests_cli_complete {
         assert_eq!(cli.get_log_level(), "debug");
     }
 
-    // TEST 36: Log level par défaut
+    // TEST 41: Log level par défaut
     // Objectif: Vérifier que le log level par défaut est info
     #[test]
     fn test_cli_default_log_level_info() {
@@ -1102,7 +1193,7 @@ mod tests_cli_complete {
         assert_eq!(cli.get_log_level(), "info");
     }
 
-    // TEST 37: Scan avec liste d'exclusion vide
+    // TEST 42: Scan avec liste d'exclusion vide
     // Objectif: Vérifier que une liste vide d'exclusions est gérée
     #[test]
     fn test_cli_scan_with_empty_exclude_list() {
@@ -1132,7 +1223,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 38: Scan avec chemin très long
+    // TEST 43: Scan avec chemin très long
     // Objectif: Vérifier que les chemins énormément longs sont gérés
     #[test]
     fn test_cli_scan_with_very_long_path() {
@@ -1163,7 +1254,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 39: Scan avec caractères spéciaux dans le chemin
+    // TEST 44: Scan avec caractères spéciaux dans le chemin
     // Objectif: Vérifier que les chemins avec caractères spéciaux fonctionnent
     #[test]
     fn test_cli_scan_with_special_characters_in_path() {
@@ -1195,7 +1286,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 40: Check avec JSON output
+    // TEST 45: Check avec JSON output
     // Objectif: Vérifier que Check fonctionne avec JSON output
     #[test]
     fn test_cli_check_with_json_output() {
@@ -1224,7 +1315,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 41: Multiples fichiers manifestés
+    // TEST 46: Multiples fichiers manifestés
     // Objectif: Vérifier que différents fichiers manifest peuvent être checkés
     #[test]
     fn test_cli_multiple_manifest_files() {
@@ -1259,7 +1350,7 @@ mod tests_cli_complete {
         }
     }
 
-    // TEST 42: Output avec différentes extensions
+    // TEST 47: Output avec différentes extensions
     // Objectif: Vérifier que différentes extensions d'output sont supportées
     #[test]
     fn test_cli_output_with_different_extensions() {
@@ -1304,5 +1395,157 @@ mod tests_cli_complete {
                 _ => panic!("Expected Scan command"),
             }
         }
+    }
+
+    // TEST 48: Sortie JSON exclusive sur stdout
+    // Objectif: Vérifier que la sortie JSON ne contient pas de texte parasite
+    #[test]
+    fn test_cli_json_config_writes_only_json_to_stdout() {
+        // Préparer une configuration temporaire lisible par la commande CLI.
+        let temp_dir =
+            tempfile::TempDir::new().expect("Impossible de créer le répertoire temporaire");
+        let config_path = temp_dir.path().join("saferepo.toml");
+        fs::write(
+            &config_path,
+            "min_severity = \"high\"\ndb_path = \"fixture-db\"\n",
+        )
+        .expect("Impossible d'écrire la configuration temporaire");
+
+        // Exécuter la commande en mode JSON et récupérer sa sortie standard.
+        let output = Command::new(env!("CARGO_BIN_EXE_SafeRepo_CLI"))
+            .args(["--json", "--config"])
+            .arg(&config_path)
+            .args(["config", "--show-path"])
+            .output()
+            .expect("Impossible d'exécuter SafeRepo_CLI");
+
+        assert!(
+            output.status.success(),
+            "La commande config JSON a échoué: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // La sortie standard doit être un document JSON valide et exploitable.
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .expect("stdout doit contenir uniquement un document JSON valide");
+        assert_eq!(json["min_severity"], "high");
+    }
+
+    // TEST 49: Noms TOML uniques dans un manifeste distant
+    // Objectif: Vérifier qu'un manifeste distant valide ses chemins TOML
+    #[test]
+    fn test_update_remote_manifest_accepts_unique_toml_file_names() {
+        // Fournir un manifeste distant composé de deux fichiers TOML distincts.
+        let manifest = "# signed bundle\nadvisory.toml\nother.toml\n";
+        // Les chemins valides doivent être conservés dans le même ordre.
+        let paths = Cli::parse_remote_manifest_paths(manifest).unwrap();
+        assert_eq!(paths, ["advisory.toml", "other.toml"]);
+    }
+
+    // TEST 50: Rejet des chemins distants dangereux ou dupliqués
+    // Objectif: Vérifier que les chemins non sûrs et doublons sont refusés
+    #[test]
+    fn test_update_remote_manifest_rejects_unsafe_or_duplicate_paths() {
+        // Tester les chemins parent, absolus, dupliqués et avec une mauvaise extension.
+        for manifest in [
+            "../advisory.toml\n",
+            "C:\\advisory.toml\n",
+            "advisory.toml\nadvisory.toml\n",
+            "advisory.txt\n",
+        ] {
+            assert!(
+                Cli::parse_remote_manifest_paths(manifest).is_err(),
+                "Le manifeste doit être rejeté: {manifest:?}"
+            );
+        }
+    }
+
+    // TEST 51: Remplacement atomique de la base de données
+    // Objectif: Vérifier que le candidat est installé et la sauvegarde supprimée
+    #[test]
+    fn test_update_atomic_replacement_installs_candidate_and_removes_backup() {
+        // Créer une base existante et un candidat contenant chacun un fichier distinct.
+        let temporary_root = tempfile::tempdir().unwrap();
+        let destination = temporary_root.path().join("vulnera_db");
+        let candidate = temporary_root.path().join("candidate");
+        fs::create_dir(&destination).unwrap();
+        fs::create_dir(&candidate).unwrap();
+        fs::write(destination.join("old.toml"), "old").unwrap();
+        fs::write(candidate.join("new.toml"), "new").unwrap();
+
+        // Remplacer la base de façon atomique.
+        Cli::replace_database_atomically(&candidate, &destination).unwrap();
+
+        // Vérifier que seul le contenu du candidat est installé.
+        assert!(!candidate.exists());
+        assert!(!destination.join("old.toml").exists());
+        assert_eq!(
+            fs::read_to_string(destination.join("new.toml")).unwrap(),
+            "new"
+        );
+        assert_eq!(fs::read_dir(temporary_root.path()).unwrap().count(), 1);
+    }
+
+    // TEST 52: Signature distante invalide
+    // Objectif: Vérifier que la base existante est conservée en cas d'échec
+    #[test]
+    fn test_update_invalid_remote_signature_preserves_existing_database() {
+        // Démarrer un serveur local qui fournit un manifeste et une signature invalides.
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 1024];
+                let size = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..size]);
+                let path = request.split_whitespace().nth(1).unwrap_or_default();
+                let (content_type, body): (&str, Vec<u8>) = match path {
+                    "/.integrity_manifest" => (
+                        "text/plain",
+                        b"# signed bundle\nadvisory.toml\n".to_vec(),
+                    ),
+                    "/.integrity_manifest.sig" => {
+                        ("application/octet-stream", vec![0_u8; 64])
+                    }
+                    "/advisory.toml" => (
+                        "text/plain",
+                        b"[advisory]\nid = \"TEST-UPDATE\"\npackage = \"serde\"\nseverity = \"high\"\ntitle = \"Test\"\ndescription = \"Test\"\n\n[versions]\npatched = [\"2.0.0\"]\n".to_vec(),
+                    ),
+                    _ => ("text/plain", b"not found".to_vec()),
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: {content_type}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+                stream.write_all(&body).unwrap();
+            }
+        });
+
+        let temporary_root = tempfile::tempdir().unwrap();
+        let destination = temporary_root.path().join("vulnera_db");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("old.toml"), "old database").unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let update_url = format!("http://{address}");
+        let result = runtime.block_on(Cli::download_from_osv_async(
+            false,
+            false,
+            destination.to_str().unwrap(),
+            Some(&update_url),
+        ));
+
+        assert!(result.is_err());
+        assert_eq!(
+            fs::read_to_string(destination.join("old.toml")).unwrap(),
+            "old database"
+        );
+        server.join().unwrap();
     }
 }

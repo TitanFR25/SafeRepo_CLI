@@ -1,13 +1,16 @@
 use clap::{Parser, Subcommand};
 use log::{debug, info};
 use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::command::config::SafeRepoConfig;
 use crate::database::db::{Advisory, Severity};
-use crate::scaning::scan;
+use crate::scaning::scan::{self, ScanOptions};
 use crate::secure::security::SecurityManager;
+use indicatif::{ProgressBar, ProgressStyle};
 
 /// SafeRepo - Scanner de vulnérabilités multi-langage
 ///
@@ -46,6 +49,12 @@ pub struct Cli {
     pub json: bool,
 }
 
+#[derive(Debug, Clone)]
+struct RemoteManifestEntry {
+    path: String,
+    hash: String,
+    size: u64,
+}
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     // Scanner un projet pour détecter les vulnérabilités
@@ -116,7 +125,7 @@ pub enum Commands {
         source: Option<String>,
 
         // Afficher les progrès détaillés
-        #[arg(short, long)]
+        #[arg(long)]
         verbose_update: bool,
 
         // Vérifier la signature GPG du fichier téléchargé
@@ -189,7 +198,10 @@ impl Cli {
         self.config.as_ref()
     }
 
-    pub fn validate_scan_path(&self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn validate_scan_path(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let resolved = path.canonicalize()?;
 
         if !resolved.exists() {
@@ -203,7 +215,10 @@ impl Cli {
         Ok(())
     }
 
-    pub fn validate_check_path(&self, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn validate_check_path(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let resolved = path.canonicalize()?;
 
         if !resolved.exists() {
@@ -228,7 +243,7 @@ impl Cli {
         let config = SafeRepoConfig::load_or_default(self.config.as_deref())?;
         config.validate()?;
 
-        info!("SafeRepo v0.6.5 démarré");
+        debug!("SafeRepo v0.6.5 démarré");
         debug!("Configuration chargée depuis: {:?}", self.config);
         debug!("Sévérité minimale: {}", config.min_severity);
 
@@ -240,13 +255,32 @@ impl Cli {
             Commands::Scan {
                 path,
                 min_severity,
-                exclude: _,
+                exclude,
                 skip_code_scan: _,
-                threads: _,
+                threads,
                 output,
             } => {
                 self.validate_scan_path(path)?;
-                self.handle_scan(path, min_severity.as_deref(), output.as_ref())?;
+                let mut exclude_paths = config.exclude_paths.clone();
+                if let Some(patterns) = exclude {
+                    exclude_paths.extend(patterns.iter().cloned());
+                }
+                let scan_options = ScanOptions {
+                    max_depth: config.max_depth,
+                    max_file_size: config.max_file_size,
+                    manifest_files: config.manifest_files.iter().cloned().collect(),
+                    ignored_dirs: config.ignore_patterns.iter().cloned().collect(),
+                    exclude_paths,
+                    database_path: fs::canonicalize(&config.db_path).ok(),
+                    threads: threads.or(config.threads),
+                };
+                self.handle_scan(
+                    path,
+                    min_severity.as_deref(),
+                    output.as_ref(),
+                    &config.db_path,
+                    &scan_options,
+                )?;
             }
 
             Commands::Check {
@@ -256,7 +290,13 @@ impl Cli {
                 output,
             } => {
                 self.validate_check_path(file)?;
-                self.handle_check(file, min_severity.as_deref(), *detailed, output.as_ref())?;
+                self.handle_check(
+                    file,
+                    min_severity.as_deref(),
+                    *detailed,
+                    output.as_ref(),
+                    &config.db_path,
+                )?;
             }
 
             Commands::Update {
@@ -265,7 +305,13 @@ impl Cli {
                 verbose_update,
                 verify_signature: _,
             } => {
-                self.handle_update(*force, source.as_deref(), *verbose_update)?;
+                self.handle_update(
+                    *force,
+                    source.as_deref(),
+                    *verbose_update,
+                    &config.db_path,
+                    config.update_url.as_deref(),
+                )?;
             }
 
             Commands::Config { show_path, reset } => {
@@ -315,37 +361,46 @@ impl Cli {
         path: &PathBuf,
         min_severity: Option<&str>,
         output: Option<&PathBuf>,
+        db_path: &str,
+        scan_options: &ScanOptions,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Démarrage du scan du répertoire: {:?}", path);
+        debug!("Démarrage du scan du répertoire: {:?}", path);
         debug!(
             "Sévérité minimale: {:?}, Sortie: {:?}",
             min_severity, output
         );
 
-        let mut security_manager = SecurityManager::new("vulnera_db");
-        scan::scan_repo(path, &mut security_manager)?;
+        let database_progress = ProgressBar::new_spinner();
+        database_progress.set_style(
+            ProgressStyle::with_template("{msg} {spinner}")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+        );
+        database_progress.set_message("Chargement de la base de données");
+        database_progress.enable_steady_tick(std::time::Duration::from_millis(100));
 
-        // Récupérer toutes les vulnérabilités depuis la DB du manager
-        let all_vulnerabilities: Vec<Advisory> = security_manager
-            .db
-            .advisories
-            .values()
-            .flat_map(|v| v.iter().cloned())
-            .collect();
+        let security_manager = match SecurityManager::new(db_path) {
+            Ok(manager) => manager,
+            Err(error) => {
+                database_progress.finish_and_clear();
+                return Err(error.into());
+            }
+        };
+        database_progress.finish_and_clear();
+        let detected_vulnerabilities = scan::scan_repo(path, &security_manager, scan_options)?;
 
-        info!(
+        debug!(
             "Scan terminé: {} vulnérabilités détectées",
-            all_vulnerabilities.len()
+            detected_vulnerabilities.len()
         );
 
         // Filtrer par sévérité si spécifié
         let filtered: Vec<_> = if let Some(sev) = min_severity {
-            all_vulnerabilities
+            detected_vulnerabilities
                 .into_iter()
                 .filter(|v| self.matches_severity_filter(v, sev))
                 .collect()
         } else {
-            all_vulnerabilities
+            detected_vulnerabilities
         };
 
         // OUTPUT JSON
@@ -430,11 +485,12 @@ impl Cli {
         min_severity: Option<&str>,
         detailed: bool,
         output: Option<&PathBuf>,
+        db_path: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         info!("Vérification du fichier: {:?}", file);
         debug!("Détaillé: {}, Sévérité min: {:?}", detailed, min_severity);
 
-        let mut security_manager = SecurityManager::new("vulnera_db");
+        let security_manager = SecurityManager::new(db_path)?;
         let vulns = security_manager.analyze_file(file)?;
 
         info!("Analyse terminée: {} vulnérabilités trouvées", vulns.len());
@@ -526,6 +582,8 @@ impl Cli {
         force: bool,
         source: Option<&str>,
         verbose: bool,
+        db_path: &str,
+        update_url: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("\n🔄 Mise à jour de la base de données...");
 
@@ -544,11 +602,11 @@ impl Cli {
         match source_name {
             "osv" => {
                 println!("🔗 Téléchargement depuis OSV.dev...");
-                self.download_from_osv(force, verbose)?;
+                self.download_from_osv(force, verbose, db_path, update_url)?;
             }
             "github" => {
                 println!("🔗 Téléchargement depuis GitHub Advisory Database...");
-                self.download_from_github(force, verbose)?;
+                self.download_from_github(force, verbose, db_path, update_url)?;
             }
             "snyk" => {
                 println!("🔗 Téléchargement depuis Snyk Database...");
@@ -576,57 +634,312 @@ impl Cli {
         &self,
         force: bool,
         verbose: bool,
+        db_path: &str,
+        update_url: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if verbose {
-            println!("   [1/3] Vérification des versions...");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(Self::download_from_osv_async(
+            force, verbose, db_path, update_url,
+        ))
+    }
+
+    pub async fn download_from_osv_async(
+        force: bool,
+        verbose: bool,
+        db_path: &str,
+        update_url: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Self::download_signed_bundle_async("OSV", force, verbose, db_path, update_url).await
+    }
+
+    async fn download_signed_bundle_async(
+        _source: &str,
+        _force: bool,
+        verbose: bool,
+        db_path: &str,
+        update_url: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        const MANIFEST_NAME: &str = ".integrity_manifest";
+        const SIGNATURE_NAME: &str = ".integrity_manifest.sig";
+        const MAX_BUNDLE_FILE_SIZE: u64 = 2 * 1024 * 1024;
+
+        let base_url = update_url.ok_or(
+            "Aucune URL de bundle OSV signée configurée; définissez update_url dans la configuration",
+        )?;
+        let base_url = base_url.trim_end_matches('/');
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?;
+
+        let manifest = Self::download_bundle_file(&client, base_url, MANIFEST_NAME).await?;
+        let signature = Self::download_bundle_file(&client, base_url, SIGNATURE_NAME).await?;
+        let manifest_text = std::str::from_utf8(&manifest)?;
+        let remote_entries = Self::parse_remote_manifest_entries(manifest_text)?;
+        if remote_entries.is_empty() {
+            return Err("Le manifeste distant ne référence aucun fichier TOML".into());
         }
 
-        // Vérifier si update nécessaire
-        if !force
-            && let Ok(metadata) = fs::metadata("vulnera_db/osv_last_update.txt")
-            && let Ok(modified) = metadata.modified()
-            && let Ok(elapsed) = modified.elapsed()
-            && elapsed.as_secs() < 86400
+        let local_entries = if Path::new(db_path).exists() {
+            Self::read_local_manifest_entries(Path::new(db_path)).unwrap_or_default()
+        } else {
+            HashMap::new()
+        };
+
+        let destination = Path::new(db_path);
+        let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)?;
+        let temporary = parent.join(format!(
+            ".{}.update-{}",
+            destination
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("vulnera_db"),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::create_dir(&temporary)?;
+
+        let result = (async {
+            fs::write(temporary.join(MANIFEST_NAME), &manifest)?;
+            fs::write(temporary.join(SIGNATURE_NAME), &signature)?;
+
+            for entry in &remote_entries {
+                let target = temporary.join(&entry.path);
+                let unchanged = local_entries
+                    .get(&entry.path)
+                    .is_some_and(|local| local.hash == entry.hash && local.size == entry.size)
+                    && destination.join(&entry.path).is_file();
+
+                if unchanged {
+                    if let Err(error) = fs::hard_link(destination.join(&entry.path), &target) {
+                        if verbose {
+                            eprintln!(
+                                "Lien dur indisponible pour {}, copie de secours: {}",
+                                entry.path, error
+                            );
+                        }
+                        fs::copy(destination.join(&entry.path), &target)?;
+                    }
+                } else {
+                    let content =
+                        Self::download_bundle_file(&client, base_url, &entry.path).await?;
+                    if content.len() as u64 > MAX_BUNDLE_FILE_SIZE {
+                        return Err(
+                            format!("advisory file exceeds {MAX_BUNDLE_FILE_SIZE} bytes").into(),
+                        );
+                    }
+                    let hash =
+                        crate::database::db::VulnerabilityDB::hash_bytes_for_update(&content);
+                    if !entry.hash.is_empty()
+                        && (hash != entry.hash || content.len() as u64 != entry.size)
+                    {
+                        return Err(format!("contenu incohérent pour {}", entry.path).into());
+                    }
+                    fs::write(&target, content)?;
+                }
+            }
+
+            let mut candidate = crate::database::db::VulnerabilityDB::new();
+            candidate.load_from_dir(&temporary)?;
+            if verbose {
+                eprintln!("Bundle OSV signé validé dans {}", temporary.display());
+            }
+            Self::replace_database_atomically(&temporary, destination)?;
+            Ok(())
+        })
+        .await;
+
+        if result.is_err() {
+            let _ = fs::remove_dir_all(&temporary);
+        }
+        result
+    }
+
+    async fn download_bundle_file(
+        client: &reqwest::Client,
+        base_url: &str,
+        name: &str,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        const MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
+        let response = client.get(format!("{base_url}/{name}")).send().await?;
+        let status = response.status();
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE_BYTES)
         {
-            // Moins de 24h
-            println!(
-                "📦 Base de données à jour (mise à jour il y a {} heures)",
-                elapsed.as_secs() / 3600
-            );
-            return Ok(());
+            return Err(format!("bundle response exceeds {MAX_RESPONSE_BYTES} bytes").into());
+        }
+        let payload = response.bytes().await?;
+        if payload.len() as u64 > MAX_RESPONSE_BYTES {
+            return Err(format!("bundle response exceeds {MAX_RESPONSE_BYTES} bytes").into());
+        }
+        if !status.is_success() {
+            return Err(format!("bundle request failed with HTTP {status}").into());
+        }
+        Ok(payload.to_vec())
+    }
+
+    pub fn parse_remote_manifest_paths(
+        manifest: &str,
+    ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let mut paths = Vec::new();
+        for line in manifest.lines().map(str::trim) {
+            if line.is_empty()
+                || line.starts_with('#')
+                || line.starts_with("SHA256: ")
+                || line.starts_with("Size: ")
+            {
+                continue;
+            }
+            let path = Path::new(line);
+            if path.is_absolute()
+                || path.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::ParentDir | std::path::Component::RootDir
+                    )
+                })
+                || path.extension().and_then(|extension| extension.to_str()) != Some("toml")
+                || path.file_name().and_then(|name| name.to_str()) != Some(line)
+            {
+                return Err(format!("chemin de bundle invalide: {line}").into());
+            }
+            if paths.iter().any(|existing| existing == line) {
+                return Err(format!("fichier dupliqué dans le manifeste: {line}").into());
+            }
+            paths.push(line.to_string());
+        }
+        Ok(paths)
+    }
+
+    fn parse_remote_manifest_entries(
+        manifest: &str,
+    ) -> Result<Vec<RemoteManifestEntry>, Box<dyn std::error::Error>> {
+        let mut entries = Vec::new();
+        let mut path: Option<String> = None;
+        let mut hash: Option<String> = None;
+
+        for line in manifest.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("SHA256: ") {
+                if path.is_none() || hash.is_some() {
+                    return Err("entrée SHA256 invalide dans le manifeste".into());
+                }
+                hash = Some(value.to_string());
+                continue;
+            }
+            if let Some(value) = line.strip_prefix("Size: ") {
+                let size = value
+                    .strip_suffix(" bytes")
+                    .ok_or("taille invalide dans le manifeste")?
+                    .parse::<u64>()?;
+                let file_path = path.take().ok_or("taille sans chemin dans le manifeste")?;
+                let file_hash = hash.take().ok_or("taille sans hash dans le manifeste")?;
+                Self::validate_remote_toml_path(&file_path)?;
+                entries.push(RemoteManifestEntry {
+                    path: file_path,
+                    hash: file_hash,
+                    size,
+                });
+                continue;
+            }
+            if let Some(previous_path) = path.replace(line.to_string()) {
+                if hash.is_some() {
+                    return Err("chemin suivant avant la fin de l'entrée précédente".into());
+                }
+                Self::validate_remote_toml_path(&previous_path)?;
+                entries.push(RemoteManifestEntry {
+                    path: previous_path,
+                    hash: String::new(),
+                    size: 0,
+                });
+            }
         }
 
-        if verbose {
-            println!("   [2/3] Téléchargement depuis OSV.dev...");
+        if let Some(last_path) = path {
+            if hash.is_some() {
+                return Err("hash sans taille dans le manifeste distant".into());
+            }
+            Self::validate_remote_toml_path(&last_path)?;
+            entries.push(RemoteManifestEntry {
+                path: last_path,
+                hash: String::new(),
+                size: 0,
+            });
+        } else if hash.is_some() {
+            return Err("entrée incomplète dans le manifeste distant".into());
+        }
+        if entries
+            .iter()
+            .map(|entry| &entry.path)
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != entries.len()
+        {
+            return Err("fichier dupliqué dans le manifeste distant".into());
+        }
+        Ok(entries)
+    }
+
+    fn read_local_manifest_entries(
+        db_path: &Path,
+    ) -> Result<HashMap<String, RemoteManifestEntry>, Box<dyn std::error::Error>> {
+        let manifest = fs::read_to_string(db_path.join(".integrity_manifest"))?;
+        Ok(Self::parse_remote_manifest_entries(&manifest)?
+            .into_iter()
+            .map(|entry| (entry.path.clone(), entry))
+            .collect())
+    }
+
+    fn validate_remote_toml_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let path_ref = Path::new(path);
+        if path_ref.is_absolute()
+            || path_ref.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::ParentDir | std::path::Component::RootDir
+                )
+            })
+            || path_ref
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("toml")
+            || path_ref.file_name().and_then(|name| name.to_str()) != Some(path)
+        {
+            return Err(format!("chemin de bundle invalide: {path}").into());
+        }
+        Ok(())
+    }
+
+    pub fn replace_database_atomically(
+        temporary: &Path,
+        destination: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let backup = destination.with_extension(format!(
+            "backup-{}",
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let had_destination = destination.exists();
+        if had_destination {
+            fs::rename(destination, &backup)?;
         }
 
-        // Créer le répertoire s'il n'existe pas
-        fs::create_dir_all("vulnera_db").ok();
-
-        // Stub: Dans une vraie implémentation, on utiliserait reqwest pour télécharger
-        // let client = reqwest::Client::new();
-        // let url = "https://api.osv.dev/v1/query";
-        // ... faire requête POST avec les dépendances à vérifier
-
-        println!("   📥 Téléchargement des données OSV.dev...");
-        println!("   ✓ CVE Rust");
-        println!("   ✓ CVE Node.js");
-        println!("   ✓ CVE Python");
-        println!("   ✓ CVE Go");
-
-        if verbose {
-            println!("   [3/3] Vérification d'intégrité SHA-256...");
+        if let Err(error) = fs::rename(temporary, destination) {
+            if had_destination {
+                let _ = fs::rename(&backup, destination);
+            }
+            return Err(Box::new(std::io::Error::other(format!(
+                "atomic database replacement failed: {error}"
+            ))));
         }
 
-        // Mettre à jour le timestamp
-        fs::write(
-            "vulnera_db/osv_last_update.txt",
-            chrono::Local::now().to_rfc3339(),
-        )
-        .ok();
-
-        println!("   ✅ Données téléchargées et vérifiées");
-
+        if had_destination {
+            fs::remove_dir_all(backup)?;
+        }
         Ok(())
     }
 
@@ -635,54 +948,42 @@ impl Cli {
         &self,
         force: bool,
         verbose: bool,
+        db_path: &str,
+        update_url: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if verbose {
-            println!("   [1/3] Vérification des versions...");
-        }
+        let update_url = update_url.ok_or(
+            "Aucune URL de bundle GitHub signée configurée; définissez update_url dans la configuration",
+        )?;
+        Self::validate_github_bundle_url(update_url)?;
 
-        if !force
-            && let Ok(metadata) = fs::metadata("vulnera_db/github_last_update.txt")
-            && let Ok(modified) = metadata.modified()
-            && let Ok(elapsed) = modified.elapsed()
-            && elapsed.as_secs() < 86400
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        runtime.block_on(Self::download_signed_bundle_async(
+            "GitHub",
+            force,
+            verbose,
+            db_path,
+            Some(update_url),
+        ))
+    }
+
+    pub fn validate_github_bundle_url(update_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let url = reqwest::Url::parse(update_url)
+            .map_err(|error| format!("URL GitHub invalide: {error}"))?;
+        let host = url.host_str().unwrap_or_default();
+        if !(host == "github.com"
+            || host.ends_with(".github.com")
+            || host == "githubusercontent.com"
+            || host.ends_with(".githubusercontent.com")
+            || host == "github.io"
+            || host.ends_with(".github.io"))
         {
-            println!(
-                "📦 Base de données à jour (mise à jour il y a {} heures)",
-                elapsed.as_secs() / 3600
+            return Err(
+                "l'URL GitHub doit pointer vers github.com, githubusercontent.com ou github.io"
+                    .into(),
             );
-            return Ok(());
         }
-
-        if verbose {
-            println!("   [2/3] Téléchargement depuis GitHub...");
-        }
-
-        fs::create_dir_all("vulnera_db").ok();
-
-        // Stub: GraphQL query vers GitHub Security Advisory API
-        // query {
-        //   securityAdvisories(first: 100) {
-        //     nodes { ... }
-        //   }
-        // }
-
-        println!("   📥 Téléchargement des données GitHub...");
-        println!("   ✓ Ruby Advisories");
-        println!("   ✓ Java Advisories");
-        println!("   ✓ PHP Advisories");
-
-        if verbose {
-            println!("   [3/3] Vérification d'intégrité...");
-        }
-
-        fs::write(
-            "vulnera_db/github_last_update.txt",
-            chrono::Local::now().to_rfc3339(),
-        )
-        .ok();
-
-        println!("   ✅ Données téléchargées et vérifiées");
-
         Ok(())
     }
 
@@ -695,6 +996,25 @@ impl Cli {
         info!("Gestion de la configuration");
 
         if show_path {
+            let config = SafeRepoConfig::load_or_default(self.config.as_deref())?;
+
+            if self.json {
+                let json_config = json!({
+                    "min_severity": &config.min_severity,
+                    "max_depth": config.max_depth,
+                    "max_file_size": config.max_file_size,
+                    "output_format": &config.output_format,
+                    "verify_signatures": config.verify_signatures,
+                    "db_path": &config.db_path,
+                    "update_url": &config.update_url,
+                    "ignore_patterns": &config.ignore_patterns,
+                    "manifest_files": &config.manifest_files,
+                    "exclude_paths": &config.exclude_paths,
+                });
+                println!("{}", serde_json::to_string_pretty(&json_config)?);
+                return Ok(());
+            }
+
             println!("\n📋 Chemins de Configuration");
             println!("==========================\n");
 
@@ -715,9 +1035,6 @@ impl Cli {
                 println!("  {}. {} [{}]", i + 1, path.display(), status);
             }
 
-            // Charger et afficher la config actuelle
-            let config = SafeRepoConfig::load_or_default(self.config.as_deref())?;
-
             println!("\n📊 Configuration Actuelle");
             println!("========================\n");
             println!("Sévérité minimale: {}", config.min_severity);
@@ -730,6 +1047,7 @@ impl Cli {
             println!("Format de sortie: {}", config.output_format);
             println!("Vérifier signatures: {}", config.verify_signatures);
             println!("Base de données: {}", config.db_path);
+            println!("URL bundle update: {:?}", config.update_url);
 
             println!("\n📁 Patterns Ignorés:");
             for pattern in &config.ignore_patterns {
@@ -746,21 +1064,6 @@ impl Cli {
                 for path in &config.exclude_paths {
                     println!("   - {}", path);
                 }
-            }
-
-            if self.json {
-                let json_config = json!({
-                    "min_severity": &config.min_severity,
-                    "max_depth": config.max_depth,
-                    "max_file_size": config.max_file_size,
-                    "output_format": &config.output_format,
-                    "verify_signatures": config.verify_signatures,
-                    "db_path": &config.db_path,
-                    "ignore_patterns": &config.ignore_patterns,
-                    "manifest_files": &config.manifest_files,
-                    "exclude_paths": &config.exclude_paths,
-                });
-                println!("\n{}", serde_json::to_string_pretty(&json_config)?);
             }
 
             return Ok(());

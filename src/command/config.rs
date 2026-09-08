@@ -51,6 +51,10 @@ pub struct SafeRepoConfig {
     // Chemin de la base de données de vulnérabilités
     #[serde(default = "default_db_path")]
     pub db_path: String,
+
+    // URL de base du bundle signé utilisé par la commande update
+    #[serde(default)]
+    pub update_url: Option<String>,
 }
 
 // Valeur par défaut
@@ -104,6 +108,7 @@ impl Default for SafeRepoConfig {
             output_format: default_output_format(),
             verify_signatures: false,
             db_path: default_db_path(),
+            update_url: None,
         }
     }
 }
@@ -235,6 +240,9 @@ impl SafeRepoConfig {
         }
         if other.db_path != default_db_path() {
             self.db_path = other.db_path;
+        }
+        if other.update_url.is_some() {
+            self.update_url = other.update_url;
         }
         self
     }

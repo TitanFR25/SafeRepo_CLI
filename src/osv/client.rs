@@ -4,8 +4,10 @@
 use crate::database::db::{Advisory, Severity, Versions};
 use crate::errorhandle::SafeRepoResult;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 const _OSV_API_URL: &str = "https://api.osv.dev/v1/query";
+const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
 /// Réponse de l'API OSV.dev
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +19,7 @@ pub struct OsvResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OsvVulnerability {
     pub id: String,
+    #[serde(default)]
     pub summary: String,
     pub details: Option<String>,
     pub severity: Option<String>,
@@ -69,25 +72,94 @@ pub struct OsvPackageQuery {
 pub struct OsvClient;
 
 impl OsvClient {
+    async fn read_response_body(mut response: reqwest::Response) -> Result<Vec<u8>, String> {
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(format!("response exceeds {} bytes", MAX_RESPONSE_BYTES));
+        }
+
+        let mut payload = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+            if payload.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                return Err(format!("response exceeds {} bytes", MAX_RESPONSE_BYTES));
+            }
+            payload.extend_from_slice(&chunk);
+        }
+
+        Ok(payload)
+    }
+
+    /// Parse a JSON OSV response payload into advisories.
+    pub fn parse_response(payload: &str) -> Result<Vec<Advisory>, serde_json::Error> {
+        let response: OsvResponse = serde_json::from_str(payload)?;
+        Ok(response
+            .vulns
+            .iter()
+            .filter_map(Self::convert_to_advisory)
+            .collect())
+    }
+
     /// Cherche les vulnérabilités pour un package spécifique
     ///
     /// # Arguments
     /// * `package_name` - Nom du package (ex: "serde", "lodash")
     /// * `ecosystem` - Écosystème (ex: "npm", "crates.io", "PyPI")
     pub async fn query(package_name: &str, ecosystem: &str) -> SafeRepoResult<Vec<Advisory>> {
-        // 🔍 Construire la requête
-        let _query = OsvQuery {
+        let query = OsvQuery {
             package: OsvPackageQuery {
                 name: package_name.to_string(),
                 ecosystem: ecosystem.to_string(),
             },
         };
 
-        // ⚠️ Pour l'instant, retourner un vecteur vide (pas de dépendance HTTP en compile-time)
-        // En production, utiliser reqwest pour faire la requête réelle
-        log::debug!("OSV Query (simulated): {} in {}", package_name, ecosystem);
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|e| crate::errorhandle::errors::SafeRepoError::OSVError {
+                operation: "HTTP client configuration".to_string(),
+                reason: e.to_string(),
+            })?;
 
-        Ok(Vec::new())
+        let response = client
+            .post(_OSV_API_URL)
+            .json(&query)
+            .send()
+            .await
+            .map_err(|e| crate::errorhandle::errors::SafeRepoError::OSVError {
+                operation: "HTTP request".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        let status = response.status();
+        let payload = Self::read_response_body(response).await.map_err(|reason| {
+            crate::errorhandle::errors::SafeRepoError::OSVError {
+                operation: "HTTP response body".to_string(),
+                reason,
+            }
+        })?;
+        if !status.is_success() {
+            return Err(crate::errorhandle::errors::SafeRepoError::OSVError {
+                operation: "OSV API status".to_string(),
+                reason: format!("{}: {}", status, String::from_utf8_lossy(&payload)),
+            });
+        }
+
+        let payload = String::from_utf8(payload).map_err(|e| {
+            crate::errorhandle::errors::SafeRepoError::OSVError {
+                operation: "HTTP response body".to_string(),
+                reason: e.to_string(),
+            }
+        })?;
+
+        Self::parse_response(&payload).map_err(|e| {
+            crate::errorhandle::errors::SafeRepoError::OSVError {
+                operation: "JSON parsing".to_string(),
+                reason: e.to_string(),
+            }
+        })
     }
 
     /// Convertir une réponse OSV.dev en Advisory
@@ -101,7 +173,9 @@ impl OsvClient {
             _ => Severity::Low, // Default
         };
 
-        // Extraire les versions corrigées depuis les ranges
+        // Préserver les événements OSV pour conserver les bornes affectées.
+        let mut introduced_versions = Vec::new();
+        let mut fixed_versions = Vec::new();
         let mut patched_versions = Vec::new();
         if let Some(affected) = &vuln.affected {
             for pkg in affected {
@@ -109,7 +183,11 @@ impl OsvClient {
                     for range in ranges {
                         if let Some(events) = &range.events {
                             for event in events {
+                                if let Some(introduced) = &event.introduced {
+                                    introduced_versions.push(introduced.clone());
+                                }
                                 if let Some(fixed) = &event.fixed {
+                                    fixed_versions.push(fixed.clone());
                                     patched_versions.push(fixed.clone());
                                 }
                             }
@@ -119,13 +197,22 @@ impl OsvClient {
             }
         }
 
+        let package_name = vuln
+            .affected
+            .as_ref()
+            .and_then(|affected| affected.first())
+            .map(|pkg| pkg.package.name.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+
         Some(Advisory {
             id: vuln.id.clone(),
-            package: "unknown".to_string(), // À déterminer depuis affected
+            package: package_name,
             severity,
             title: vuln.summary.clone(),
             description: vuln.details.clone().unwrap_or_default(),
             versions: Versions {
+                introduced: introduced_versions,
+                fixed: fixed_versions,
                 patched: patched_versions,
                 unaffected: None,
             },

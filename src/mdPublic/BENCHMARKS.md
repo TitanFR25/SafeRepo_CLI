@@ -1,6 +1,7 @@
 # 📊 SafeRepo Performance Benchmarks / Benchmarks de Performance SafeRepo
 
 ### ⚡ Raccourcis / Shortcuts
+
 - [🇫🇷 Version Française](#-version-française)
 - [🇬🇧 English Version](#-english-version)
 
@@ -11,99 +12,81 @@
 ### 📋 Aperçu
 
 SafeRepo inclut des benchmarks de performance complets utilisant `criterion.rs` pour mesurer:
-- **Vitesse de scanning** (fichiers traités par seconde)
-- **Performance de parsing** (différents formats de manifestes)
-- **Utilisation mémoire** (via criterion)
-- **Traversée de répertoires** (avec profondeurs variables)
-- **Détection de manifestes** (identification des types de fichiers)
+
+- **Parsing de production** via `SecurityManager::analyze_file`
+- **Scan de production** via `scan_repo`
+- **Effet du parallélisme** avec 1 et 4 threads
+- **Débit** sur une arborescence de manifestes réelle
 
 ### 🏃 Exécuter les Benchmarks
 
 #### Tous les benchmarks
+
 ```bash
 cargo bench
 ```
 
 #### Groupe spécifique
+
 ```bash
-cargo bench --bench scanner_bench -- format_parsing
+cargo bench --bench scanner_bench -- production_parsing
+cargo bench --bench scanner_bench -- production_scan
+cargo bench --bench scanner_bench -- production_throughput
 ```
 
 #### Avec comparaison baseline
+
 ```bash
 cargo bench -- --save-baseline ma_baseline
 cargo bench -- --baseline ma_baseline
 ```
 
 #### Rapport HTML
+
 ```bash
 cargo bench -- --plotting-backend gnuplot
 ```
+
 Rapports générés dans `target/criterion/`.
 
 ### 📊 Groupes de Benchmarks
 
-#### 1. Scanning d'un fichier unique
-- **Nom**: `scan_single_file_1000_lines`
-- **Mesure**: Temps pour scanner un fichier manifeste de 1000 lignes
-- **Cible**: < 100μs par fichier
+#### 1. Parsing de production
+
+- **Groupe**: `production_parsing`
+- **Mesure**: Appel réel à `SecurityManager::analyze_file` sur Cargo.lock, package-lock.json et requirements.txt
 
 #### 2. Parsing de formats
 
-**Cargo.lock**
-- **Nom**: `parse_cargo_lock_format`
-- **Mesure**: Parsing du fichier TOML Cargo.lock
-- **Cible**: < 500μs
+Les noms des mesures sont générés depuis les fichiers fixtures, par exemple
+`Cargo_lock`, `package-lock_json` et `requirements_txt`. Aucune cible fixe en
+microsecondes n'est publiée : les résultats dépendent de la machine.
 
-**package-lock.json**
-- **Nom**: `parse_package_lock_format`
-- **Mesure**: Parsing du fichier JSON npm
-- **Cible**: < 1ms
+#### 3. Scan de production
 
-**requirements.txt**
-- **Nom**: `parse_requirements_format`
-- **Mesure**: Parsing du fichier texte Python
-- **Cible**: < 300μs
+- **Groupe**: `production_scan`
+- **Mesure**: Appel réel à `scan_repo` sur 40 manifestes imbriqués
+- **Variantes**: `threads_1` et `threads_4`
 
-#### 3. Scanning de répertoires
-- **Profondeurs testées**: 10, 20, 40 niveaux
-- **Fichiers par niveau**: 3 fichiers
-- **Cible**: Complexité linéaire O(n)
-- **Attendu**: Arborescence 40-level (120 fichiers) < 10ms
+#### 4. Débit (Throughput)
 
-#### 4. Détection de manifestes
+- **Groupe**: `production_throughput`
+- **Nom**: `scan_101_real_manifests`
+- **Mesure**: Manifestes réellement analysés par seconde via `scan_repo`
 
-Types testés:
-- Cargo.lock
-- package-lock.json
-- requirements.txt
-- go.mod
-- pom.xml
-- Gemfile.lock
-- composer.lock
+### 🎯 Références de Performance (v0.6.9)
 
-#### 5. Débit (Throughput)
-- **Nom**: `process_1000_small_files`
-- **Mesure**: Fichiers traités par seconde
-- **Cible**: > 10 000 fichiers/seconde
-
-### 🎯 Cibles de Performance (v0.6.5.1)
-
-| Métrique | Cible | Actuel |
-|----------|-------|--------|
-| Scanning fichier unique | < 100μs | - |
-| Parse Cargo.lock | < 500μs | - |
-| Parse npm | < 1ms | - |
-| Parse Python | < 300μs | - |
-| Scan dir (40-level) | < 10ms | - |
-| Débit | > 10k fichiers/s | - |
-| Mémoire max (1000 fichiers) | < 50MB | - |
+| Métrique                  | Cible              | Actuel                |
+| ------------------------- | ------------------ | --------------------- |
+| Parsing de production     | Baseline Criterion | À mesurer par machine |
+| Scan production threads=1 | Baseline Criterion | À mesurer par machine |
+| Scan production threads=4 | Baseline Criterion | À mesurer par machine |
+| Débit de manifestes       | Baseline Criterion | À mesurer par machine |
 
 ### 🔄 Benchmarking Continu
 
-Lancés automatiquement:
-- ✅ À chaque push vers `main`
-- ✅ Sur les pull requests (comparaison optionnelle)
+Le workflow CI compile les benchmarks sur les pushes vers `main`. Il ne publie
+pas encore de comparaison automatique de performances.
 
 Voir `.github/workflows/ci.yml` pour l'intégration CI/CD.
 
@@ -111,19 +94,19 @@ Voir `.github/workflows/ci.yml` pour l'intégration CI/CD.
 
 ```bash
 # Linux:
-valgrind --tool=massif cargo bench --bench scanner_bench -- single_file
+valgrind --tool=massif cargo bench --bench scanner_bench -- production_parsing
 
 # macOS (Xcode):
-cargo bench --bench scanner_bench -- single_file -- --profile-time=10
+valgrind --tool=massif cargo bench --bench scanner_bench -- production_parsing
 ```
 
 ### 🎯 Stratégies d'Optimisation
 
-Futur (v0.7.0+):
+Suivi (v0.7.0+):
 
 1. **Scanning parallèle** (rayon)
-   - Actuellement: Séquentiel
-   - Cible: Multi-threadé (+50-80% speedup)
+   - Actuellement: Disponible via `ScanOptions.threads`
+   - Suivi: Comparer les baselines sur des machines et systèmes de fichiers représentatifs
 
 2. **Couche de cache**
    - Actuellement: Pas de cache
@@ -136,10 +119,10 @@ Futur (v0.7.0+):
 ### 📈 Établir une Baseline
 
 ```bash
-cargo bench -- --save-baseline v0.6.5.1
+cargo bench -- --save-baseline v0.6.9
 ```
 
-### 🐛 Déboguer les Benchmarks
+cargo bench -- --save-baseline v0.6.9
 
 ```bash
 # Sortie verbose
@@ -149,7 +132,7 @@ CRITERION_VERBOSE=1 cargo bench
 cargo bench -- --verbose
 
 # Test simple multiple fois
-cargo bench --bench scanner_bench -- scan_single_file_1000_lines --sample-size 100
+cargo bench --bench scanner_bench -- production_scan -- --sample-size 10
 ```
 
 ### 📚 Références
@@ -164,6 +147,7 @@ cargo bench --bench scanner_bench -- scan_single_file_1000_lines --sample-size 1
 ### 📋 Overview
 
 SafeRepo includes comprehensive performance benchmarks using `criterion.rs` to measure and track:
+
 - **Scanning speed** (files processed per second)
 - **Parsing performance** (different manifest formats)
 - **Memory usage** (via criterion)
@@ -173,90 +157,72 @@ SafeRepo includes comprehensive performance benchmarks using `criterion.rs` to m
 ### 🏃 Running Benchmarks
 
 #### All benchmarks
+
 ```bash
 cargo bench
 ```
 
 #### Specific benchmark group
+
 ```bash
-cargo bench --bench scanner_bench -- format_parsing
+cargo bench --bench scanner_bench -- production_parsing
+cargo bench --bench scanner_bench -- production_scan
+cargo bench --bench scanner_bench -- production_throughput
 ```
 
 #### With baseline comparison
+
 ```bash
 cargo bench -- --save-baseline my_baseline
 cargo bench -- --baseline my_baseline
 ```
 
 #### HTML report
+
 ```bash
 cargo bench -- --plotting-backend gnuplot
 ```
+
 Reports generated in `target/criterion/`.
 
 ### 📊 Benchmark Groups
 
 #### 1. Single File Scanning
-- **Name**: `scan_single_file_1000_lines`
-- **Measures**: Time to scan a single manifest file with 1000 lines
-- **Goal**: < 100μs per file
+
+- **Group**: `production_parsing`
+- **Measures**: Real parser calls through `SecurityManager::analyze_file`
 
 #### 2. Format Parsing
 
-**Cargo.lock**
-- **Name**: `parse_cargo_lock_format`
-- **Measures**: Parsing TOML-based Cargo.lock file
-- **Goal**: < 500μs
+Benchmark names are generated from fixture filenames, such as `Cargo_lock`,
+`package-lock_json`, and `requirements_txt`. No fixed microsecond target is
+published because results depend on the machine.
 
-**package-lock.json**
-- **Name**: `parse_package_lock_format`
-- **Measures**: Parsing JSON-based npm lock file
-- **Goal**: < 1ms
+#### 3. Production Scanning
 
-**requirements.txt**
-- **Name**: `parse_requirements_format`
-- **Measures**: Parsing plain text Python requirements
-- **Goal**: < 300μs
+- **Group**: `production_scan`
+- **Measures**: Real `scan_repo` calls over 40 nested manifests
+- **Variants**: `threads_1` and `threads_4`
 
-#### 3. Directory Scanning
-- **Depths tested**: 10, 20, 40 levels
-- **Files per level**: 3 files
-- **Goal**: Linear complexity O(n)
-- **Expected**: 40-level tree (120 files) < 10ms
+#### 4. Throughput
 
-#### 4. Manifest Detection
+- **Group**: `production_throughput`
+- **Name**: `scan_101_real_manifests`
+- **Measures**: Real manifests processed per second through `scan_repo`
 
-Types tested:
-- Cargo.lock
-- package-lock.json
-- requirements.txt
-- go.mod
-- pom.xml
-- Gemfile.lock
-- composer.lock
+### 🎯 Performance References (v0.6.9)
 
-#### 5. Throughput
-- **Name**: `process_1000_small_files`
-- **Measures**: Files processed per second
-- **Goal**: > 10,000 files/second
-
-### 🎯 Performance Targets (v0.6.5.1)
-
-| Metric | Target | Current |
-|--------|--------|---------|
-| Single file scan | < 100μs | - |
-| Cargo.lock parse | < 500μs | - |
-| npm parse | < 1ms | - |
-| Python parse | < 300μs | - |
-| Dir scan (40-level) | < 10ms | - |
-| Throughput | > 10k files/s | - |
-| Max memory (1000 files) | < 50MB | - |
+| Metric                    | Target             | Current           |
+| ------------------------- | ------------------ | ----------------- |
+| Production parsing        | Criterion baseline | Machine-dependent |
+| Production scan threads=1 | Criterion baseline | Machine-dependent |
+| Production scan threads=4 | Criterion baseline | Machine-dependent |
+| Manifest throughput       | Criterion baseline | Machine-dependent |
 
 ### 🔄 Continuous Benchmarking
 
-Run automatically:
-- ✅ Every push to `main` branch
-- ✅ On pull requests (optional comparison)
+The CI workflow compiles benchmarks on pushes to `main`. It does not yet
+publish automatic performance comparisons.
 
 See `.github/workflows/ci.yml` for CI integration.
 
@@ -264,19 +230,19 @@ See `.github/workflows/ci.yml` for CI integration.
 
 ```bash
 # Linux:
-valgrind --tool=massif cargo bench --bench scanner_bench -- single_file
+valgrind --tool=massif cargo bench --bench scanner_bench -- production_parsing
 
 # macOS (Xcode):
-cargo bench --bench scanner_bench -- single_file -- --profile-time=10
+cargo bench --bench scanner_bench -- production_parsing -- --profile-time=10
 ```
 
 ### 🎯 Optimization Strategies
 
-Current (v0.6.5.1):
+Current (v0.6.9):
 
-1. **Sequential scanning** (rayon ready)
-   - Current: Single-threaded
-   - Future: Multi-threaded (+50-80% speedup)
+1. **Parallel scanning** (rayon)
+   - Current: Configurable through `ScanOptions.threads`
+   - Follow-up: Compare baselines on representative machines and file systems
 
 2. **No caching layer**
    - Current: No caching between scans
@@ -289,7 +255,7 @@ Current (v0.6.5.1):
 ### 📈 Establish Baseline
 
 ```bash
-cargo bench -- --save-baseline v0.6.5.1
+cargo bench -- --save-baseline v0.6.9
 ```
 
 ### 🐛 Debug Benchmarks
@@ -302,7 +268,7 @@ CRITERION_VERBOSE=1 cargo bench
 cargo bench -- --verbose
 
 # Single test multiple times
-cargo bench --bench scanner_bench -- scan_single_file_1000_lines --sample-size 100
+cargo bench --bench scanner_bench -- production_scan --sample-size 10
 ```
 
 ### 📚 References

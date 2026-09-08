@@ -13,6 +13,7 @@ ignore_patterns = [
     "dist",
     ".venv",
     "venv",
+    "vulnera_db",
 ]
 
 # Fichiers manifeste à scanner
@@ -53,3 +54,6 @@ verify_signatures = false
 
 # Chemin de la base de données
 db_path = "vulnera_db"
+
+# URL de base du bundle signé (OSV ou GitHub; laisser absent pour désactiver update)
+# update_url = "https://example.invalid/saferepo-db"

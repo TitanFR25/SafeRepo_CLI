@@ -2,12 +2,42 @@
 #[cfg(test)]
 mod tests_integration {
     use SafeRepo_CLI::database::db::VulnerabilityDB;
-    use SafeRepo_CLI::scaning::scan::scan_repo;
+    use SafeRepo_CLI::scaning::scan::{ScanOptions, scan_repo};
     use SafeRepo_CLI::secure::security::SecurityManager;
-    use std::fs;
+    use ed25519_dalek::{Signer, SigningKey};
     use std::thread;
     use std::time::Duration;
+    use std::{fs, path::Path};
     use tempfile::TempDir;
+
+    fn test_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[0x42; 32])
+    }
+
+    fn write_signed_manifest(db_path: &Path, signing_key: &SigningKey, files: &[&Path]) {
+        let mut manifest = String::from("# Database Integrity Manifest\n\n");
+        for file_path in files {
+            let hash = VulnerabilityDB::calculate_file_hash(file_path)
+                .expect("Impossible de calculer le hash du fixture");
+            let size = fs::metadata(file_path)
+                .expect("Impossible de lire les métadonnées du fixture")
+                .len();
+            manifest.push_str(&format!(
+                "{}\n  SHA256: {}\n  Size: {} bytes\n\n",
+                file_path.display(),
+                hash,
+                size
+            ));
+        }
+
+        fs::write(db_path.join(".integrity_manifest"), &manifest)
+            .expect("Impossible d'écrire le manifeste signé");
+        fs::write(
+            db_path.join(".integrity_manifest.sig"),
+            signing_key.sign(manifest.as_bytes()).to_bytes(),
+        )
+        .expect("Impossible d'écrire la signature du manifeste");
+    }
 
     // TEST 1: Scan complet d'un projet fictif (Node.js + Rust)
     // Objectif: Simuler un vrai scan d'un projet multi-langage
@@ -62,10 +92,12 @@ mod tests_integration {
         fs::write(temp_dir.path().join("main.js"), "console.log('hello')")
             .expect("Impossible de créer main.js");
 
-        let mut manager = SecurityManager::new("vulnera_db");
+        let manager = SecurityManager {
+            db: VulnerabilityDB::new(),
+        };
 
         // Scanner le projet complet
-        let result = scan_repo(temp_dir.path(), &mut manager);
+        let result = scan_repo(temp_dir.path(), &manager, &ScanOptions::default());
 
         // Le scan doit réussir
         assert!(result.is_ok(), "Le scan complet doit réussir");
@@ -91,6 +123,8 @@ mod tests_integration {
             patched = ["1.0.200"]"#;
 
         fs::write(&vuln_file, toml_content).expect("Impossible d'écrire la vulnérabilité");
+        let signing_key = test_signing_key();
+        write_signed_manifest(temp_db_dir.path(), &signing_key, &[&vuln_file]);
 
         // Créer le projet avec Cargo.lock vulnérable
         let project_dir = TempDir::new().expect("Impossible de créer un répertoire temporaire");
@@ -104,12 +138,17 @@ mod tests_integration {
 
         fs::write(&cargo_lock, cargo_content).expect("Impossible de créer Cargo.lock");
 
-        // Créer le manager avec la DB
-        let mut manager =
-            SecurityManager::new(temp_db_dir.path().to_str().expect("Chemin invalide"));
+        // Créer le manager avec la DB signée
+        let mut db = VulnerabilityDB::new();
+        db.load_from_dir_with_verifying_key(temp_db_dir.path(), &signing_key.verifying_key())
+            .expect("La base temporaire signée doit être chargée");
+        let manager = SecurityManager { db };
 
         // Scanner et analyser
-        let issues = manager.analyze_file(&cargo_lock).unwrap_or_default().len();
+        let issues = manager
+            .analyze_file(&cargo_lock)
+            .expect("Le Cargo.lock vulnérable doit être analysé")
+            .len();
 
         // Une vulnérabilité doit être détectée
         assert_eq!(
@@ -138,6 +177,8 @@ mod tests_integration {
             patched = ["1.0.200"]"#;
 
         fs::write(&vuln_file, toml_content).expect("Impossible d'écrire la vulnérabilité");
+        let signing_key = test_signing_key();
+        write_signed_manifest(temp_db_dir.path(), &signing_key, &[&vuln_file]);
 
         // Créer le projet avec Cargo.lock sain
         let project_dir = TempDir::new().expect("Impossible de créer un répertoire temporaire");
@@ -150,11 +191,16 @@ mod tests_integration {
 
         fs::write(&cargo_lock, cargo_content).expect("Impossible de créer Cargo.lock");
 
-        let mut manager =
-            SecurityManager::new(temp_db_dir.path().to_str().expect("Chemin invalide"));
+        let mut db = VulnerabilityDB::new();
+        db.load_from_dir_with_verifying_key(temp_db_dir.path(), &signing_key.verifying_key())
+            .expect("La base temporaire signée doit être chargée");
+        let manager = SecurityManager { db };
 
         // Analyser
-        let issues = manager.analyze_file(&cargo_lock).unwrap_or_default().len();
+        let issues = manager
+            .analyze_file(&cargo_lock)
+            .expect("Le Cargo.lock patché doit être analysé")
+            .len();
 
         // AUCUNE vulnérabilité ne doit être trouvée
         assert_eq!(
@@ -164,28 +210,17 @@ mod tests_integration {
     }
 
     // TEST 4: Comportement avec DB manquante ou vide
-    // Objectif: Vérifier la gestion gracieuse si la DB est vide
+    // Objectif: Vérifier qu'une DB manquante bloque le scan
     #[test]
     fn test_scan_with_missing_database() {
-        // Créer un manager avec un chemin DB inexistant
-        let mut manager = SecurityManager::new("/tmp/nonexistent_db_12345");
+        let result = SecurityManager::new("/tmp/nonexistent_db_12345");
 
-        let project_dir = TempDir::new().expect("Impossible de créer un répertoire temporaire");
-        let cargo_lock = project_dir.path().join("Cargo.lock");
-        fs::write(
-            &cargo_lock,
-            "[[package]]\nname=\"serde\"\nversion=\"1.0.0\"",
-        )
-        .expect("Impossible de créer Cargo.lock");
+        assert!(result.is_err(), "Une DB manquante doit être refusée");
 
-        // Analyser (la DB est vide)
-        let issues = manager.analyze_file(&cargo_lock).unwrap_or_default().len();
+        let empty_db = TempDir::new().expect("Impossible de créer une DB temporaire vide");
+        let result = SecurityManager::new(empty_db.path().to_str().expect("Chemin invalide"));
 
-        // Doit retourner 0 (pas de vulnérabilité connue si DB vide)
-        assert_eq!(
-            issues, 0,
-            "Avec une DB vide, aucune vulnérabilité ne peut être détectée"
-        );
+        assert!(result.is_err(), "Une DB vide doit être refusée");
     }
 
     // TEST 5: Vérification d'intégrité de la base de données
@@ -230,13 +265,17 @@ mod tests_integration {
 
         fs::write(&tokio_vuln, tokio_content).expect("Impossible de créer fichier tokio_vuln.toml");
 
-        // Créer manifeste d'intégrité (fichier vide, sera rempli lors du load)
-        let manifest_path = temp_db_dir.path().join(".integrity_manifest");
-        fs::write(&manifest_path, "").expect("Impossible de créer manifeste");
+        let signing_key = test_signing_key();
+        write_signed_manifest(
+            temp_db_dir.path(),
+            &signing_key,
+            &[&serde_vuln, &tokio_vuln],
+        );
 
         // 2. Charger la DB et générer les hashes d'intégrité
         let mut db = VulnerabilityDB::new();
-        let load_result = db.load_from_dir(temp_db_dir.path());
+        let load_result =
+            db.load_from_dir_with_verifying_key(temp_db_dir.path(), &signing_key.verifying_key());
         assert!(
             load_result.is_ok(),
             "Le chargement de la DB doit réussir: {:?}",
@@ -256,7 +295,10 @@ mod tests_integration {
         );
 
         // 3. Vérifier l'intégrité initiale (doit réussir)
-        let integrity_check = db.verify_database_integrity(temp_db_dir.path());
+        let integrity_check = db.verify_database_integrity_with_verifying_key(
+            temp_db_dir.path(),
+            &signing_key.verifying_key(),
+        );
         assert!(
             integrity_check.is_ok(),
             "La vérification d'intégrité initiale doit réussir"
@@ -286,10 +328,11 @@ mod tests_integration {
 
         // 5. Charger la DB modifiée et vérifier que l'intégrité détecte le changement
         let mut db_modified = VulnerabilityDB::new();
-        let load_result_mod = db_modified.load_from_dir(temp_db_dir.path());
+        let load_result_mod = db_modified
+            .load_from_dir_with_verifying_key(temp_db_dir.path(), &signing_key.verifying_key());
         assert!(
-            load_result_mod.is_ok(),
-            "Le chargement de la DB modifiée doit réussir"
+            load_result_mod.is_err(),
+            "Le chargement doit refuser une DB qui diffère du manifeste"
         );
 
         // Comparer les hashes avec le log d'audit précédent
@@ -347,11 +390,53 @@ mod tests_integration {
 
         let error_msg = integrity_result.unwrap_err();
         assert!(
-            error_msg.contains("manifeste"),
+            error_msg.contains("manifest"),
             "Le message d'erreur doit mentionner le manifeste manquant: {}",
             error_msg
         );
 
         println!("✅ Test manifeste manquant réussi: erreur correctement rapportée");
+    }
+
+    // TEST 7: Signature de manifeste absente ou altérée
+    // Objectif: Vérifier qu'une DB refuse un manifeste sans signature valide
+    #[test]
+    fn test_database_rejects_missing_or_tampered_manifest_signature() {
+        // Créer une DB signée contenant un fichier de vulnérabilité valide.
+        let temp_db_dir = TempDir::new().expect("Impossible de créer répertoire DB temporaire");
+        let vulnerability_file = temp_db_dir.path().join("test_vuln.toml");
+        fs::write(
+            &vulnerability_file,
+            "[advisory]\nid = \"TEST-001\"\npackage = \"test\"\nseverity = \"high\"\ntitle = \"Test\"\ndescription = \"Test\"\n\n[versions]\npatched = [\"1.0.0\"]",
+        )
+        .expect("Impossible d'écrire la vulnérabilité de test");
+        let signing_key = test_signing_key();
+        write_signed_manifest(temp_db_dir.path(), &signing_key, &[&vulnerability_file]);
+
+        // Supprimer la signature et vérifier que le chargement est refusé.
+        fs::remove_file(temp_db_dir.path().join(".integrity_manifest.sig"))
+            .expect("Impossible de supprimer la signature");
+        let mut missing_signature_db = VulnerabilityDB::new();
+        assert!(
+            missing_signature_db
+                .load_from_dir_with_verifying_key(temp_db_dir.path(), &signing_key.verifying_key())
+                .is_err(),
+            "Une signature absente doit être refusée"
+        );
+
+        // Recréer le manifeste, altérer sa signature, puis vérifier son rejet.
+        write_signed_manifest(temp_db_dir.path(), &signing_key, &[&vulnerability_file]);
+        let signature_path = temp_db_dir.path().join(".integrity_manifest.sig");
+        let mut signature = fs::read(&signature_path).expect("Impossible de lire la signature");
+        signature[0] ^= 1;
+        fs::write(&signature_path, signature).expect("Impossible d'altérer la signature");
+
+        let mut tampered_signature_db = VulnerabilityDB::new();
+        assert!(
+            tampered_signature_db
+                .load_from_dir_with_verifying_key(temp_db_dir.path(), &signing_key.verifying_key())
+                .is_err(),
+            "Une signature altérée doit être refusée"
+        );
     }
 }

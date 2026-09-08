@@ -2,7 +2,40 @@
 #[cfg(test)]
 mod tests_vulnerability_db {
     use SafeRepo_CLI::database::db::{Advisory, Severity, Versions, VulnerabilityDB};
+    use SafeRepo_CLI::errorhandle::SafeRepoResult;
+    use ed25519_dalek::{Signer, SigningKey};
     use semver::Version;
+    use std::{fs, path::Path};
+
+    fn load_signed_fixture(
+        db: &mut VulnerabilityDB,
+        db_path: &Path,
+        files: &[&Path],
+    ) -> SafeRepoResult<()> {
+        let signing_key = SigningKey::from_bytes(&[0x24; 32]);
+        let mut manifest = String::from("# Database Integrity Manifest\n\n");
+        for file_path in files {
+            let hash = VulnerabilityDB::calculate_file_hash(file_path)
+                .expect("Impossible de calculer le hash du fixture");
+            let size = fs::metadata(file_path)
+                .expect("Impossible de lire les métadonnées du fixture")
+                .len();
+            manifest.push_str(&format!(
+                "{}\n  SHA256: {}\n  Size: {} bytes\n\n",
+                file_path.display(),
+                hash,
+                size
+            ));
+        }
+        fs::write(db_path.join(".integrity_manifest"), &manifest)
+            .expect("Impossible d'écrire le manifeste signé");
+        fs::write(
+            db_path.join(".integrity_manifest.sig"),
+            signing_key.sign(manifest.as_bytes()).to_bytes(),
+        )
+        .expect("Impossible d'écrire la signature du manifeste");
+        db.load_from_dir_with_verifying_key(db_path, &signing_key.verifying_key())
+    }
 
     // TEST 1: Création d'une nouvelle base de données vide
     // Objectif: Vérifier qu'une DB nouvellement créée est bien vide
@@ -48,7 +81,7 @@ mod tests_vulnerability_db {
         std::fs::write(&vuln_file, toml_content).expect("Impossible d'écrire le fichier test");
 
         // Charger la base depuis le répartoire temporaire
-        let result = db.load_from_dir(temp_dir.path());
+        let result = load_signed_fixture(&mut db, temp_dir.path(), &[&vuln_file]);
 
         // 1. Le chargement doit réussir
         assert!(
@@ -56,7 +89,6 @@ mod tests_vulnerability_db {
             "Le chargement du fichier TOML à échoué : {:?}",
             result.err()
         );
-
         // 2. La DB doit contenir exactement 1 advisory pour "log4shell"
         assert_eq!(
             db.advisories.len(),
@@ -82,6 +114,35 @@ mod tests_vulnerability_db {
             Severity::Critical,
             "La sévérité devrait etre Critical"
         );
+    }
+
+    // TEST: Compatibilité avec les tableaux aliases exportés par PowerShell
+    #[test]
+    fn test_load_toml_with_legacy_alias_array_syntax() {
+        let mut db = VulnerabilityDB::new();
+        let temp_dir = tempfile::TempDir::new().expect("Impossible de créer le répertoire");
+        let vuln_file = temp_dir.path().join("legacy_alias.toml");
+        let toml_content = r#"
+            [advisory]
+            id = "GHSA-test"
+            package = "test-package"
+            severity = "high"
+            title = "Test"
+            description = "Test"
+            aliases = @("CVE-2024-0001")
+
+            [versions]
+            introduced = ["0"]
+        "#;
+
+        fs::write(&vuln_file, toml_content).expect("Impossible d'écrire le fixture");
+        let result = load_signed_fixture(&mut db, temp_dir.path(), &[&vuln_file]);
+
+        assert!(
+            result.is_ok(),
+            "Le TOML legacy doit être accepté: {result:?}"
+        );
+        assert!(db.advisories.contains_key("test-package"));
     }
 
     // TEST 3: Charger un répertoire avec plusieurs fichiers TOML
@@ -138,9 +199,11 @@ mod tests_vulnerability_db {
             ),
         ];
 
+        let mut valid_files = Vec::new();
         for (filename, content) in files_to_create {
             let file_path = temp_dir.path().join(filename);
             std::fs::write(&file_path, content).expect("Impossible d'écrire le fichier test");
+            valid_files.push(file_path);
         }
 
         // Créer 1 fichier corrompu (le scanner doit l'ignorer)
@@ -153,7 +216,8 @@ mod tests_vulnerability_db {
         .expect("Impossible d'écrire le fichier");
 
         // Charger la base
-        let result = db.load_from_dir(temp_dir.path());
+        let valid_file_refs: Vec<&Path> = valid_files.iter().map(|path| path.as_path()).collect();
+        let result = load_signed_fixture(&mut db, temp_dir.path(), &valid_file_refs);
 
         // 1. Le chargement ne doit pas planter malgré le fichier corrompu
         assert!(
@@ -198,6 +262,8 @@ mod tests_vulnerability_db {
             title: "Test".to_string(),
             description: "Test".to_string(),
             versions: Versions {
+                introduced: Vec::new(),
+                fixed: Vec::new(),
                 patched: vec!["0.4.0".to_string(), "0.5.0".to_string()],
                 unaffected: None,
             },
@@ -235,6 +301,8 @@ mod tests_vulnerability_db {
             title: "Test".to_string(),
             description: "Test".to_string(),
             versions: Versions {
+                introduced: Vec::new(),
+                fixed: Vec::new(),
                 patched: vec!["0.4.0".to_string(), "0.5.0".to_string()],
                 unaffected: None,
             },
@@ -254,7 +322,130 @@ mod tests_vulnerability_db {
         );
     }
 
-    // TEST 6: Package inconnu retourne une liste vide
+    // TEST 6: Bornes d'une plage de versions affectées
+    // Objectif: Vérifier que les bornes introduced et fixed sont respectées
+    #[test]
+    fn test_check_vulnerability_uses_affected_range_bounds() {
+        // Définir une vulnérabilité active entre les versions 1.0.0 et 2.0.0.
+        let mut db = VulnerabilityDB::new();
+        db.advisories.insert(
+            "serde".to_string(),
+            vec![Advisory {
+                id: "TEST-RANGE-001".to_string(),
+                package: "serde".to_string(),
+                severity: Severity::High,
+                title: "Test".to_string(),
+                description: "Test".to_string(),
+                versions: Versions {
+                    introduced: vec!["1.0.0".to_string()],
+                    fixed: vec!["2.0.0".to_string()],
+                    patched: Vec::new(),
+                    unaffected: None,
+                },
+            }],
+        );
+
+        // Vérifier les versions avant, dans et après la plage affectée.
+        assert_eq!(
+            db.check_vulnerability("serde", &Version::parse("0.9.0").unwrap())
+                .len(),
+            0
+        );
+        assert_eq!(
+            db.check_vulnerability("serde", &Version::parse("1.0.0").unwrap())
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.check_vulnerability("serde", &Version::parse("1.9.9").unwrap())
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.check_vulnerability("serde", &Version::parse("2.0.0").unwrap())
+                .len(),
+            0
+        );
+    }
+
+    // TEST 7: Version explicitement non affectée
+    // Objectif: Vérifier qu'une version unaffected est prioritaire sur la plage affectée
+    #[test]
+    fn test_check_vulnerability_unaffected_overrides_affected_range() {
+        // Définir une plage affectée avec une version explicitement non affectée.
+        let mut db = VulnerabilityDB::new();
+        db.advisories.insert(
+            "serde".to_string(),
+            vec![Advisory {
+                id: "TEST-RANGE-002".to_string(),
+                package: "serde".to_string(),
+                severity: Severity::High,
+                title: "Test".to_string(),
+                description: "Test".to_string(),
+                versions: Versions {
+                    introduced: vec!["1.0.0".to_string()],
+                    fixed: vec!["2.0.0".to_string()],
+                    patched: Vec::new(),
+                    unaffected: Some(vec!["1.5.0".to_string()]),
+                },
+            }],
+        );
+
+        // La version non affectée doit être ignorée malgré sa présence dans la plage.
+        assert_eq!(
+            db.check_vulnerability("serde", &Version::parse("1.4.9").unwrap())
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.check_vulnerability("serde", &Version::parse("1.5.0").unwrap())
+                .len(),
+            0
+        );
+    }
+
+    // TEST 8: Plages affectées disjointes
+    // Objectif: Vérifier que plusieurs plages distinctes sont évaluées correctement
+    #[test]
+    fn test_check_vulnerability_supports_disjoint_affected_ranges() {
+        // Définir deux plages affectées séparées par une plage saine.
+        let mut db = VulnerabilityDB::new();
+        db.advisories.insert(
+            "serde".to_string(),
+            vec![Advisory {
+                id: "TEST-RANGE-003".to_string(),
+                package: "serde".to_string(),
+                severity: Severity::High,
+                title: "Test".to_string(),
+                description: "Test".to_string(),
+                versions: Versions {
+                    introduced: vec!["1.0.0".to_string(), "3.0.0".to_string()],
+                    fixed: vec!["2.0.0".to_string(), "4.0.0".to_string()],
+                    patched: Vec::new(),
+                    unaffected: None,
+                },
+            }],
+        );
+
+        // Vérifier une version dans chaque plage et une version dans l'intervalle sain.
+        assert_eq!(
+            db.check_vulnerability("serde", &Version::parse("1.5.0").unwrap())
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.check_vulnerability("serde", &Version::parse("2.5.0").unwrap())
+                .len(),
+            0
+        );
+        assert_eq!(
+            db.check_vulnerability("serde", &Version::parse("3.5.0").unwrap())
+                .len(),
+            1
+        );
+    }
+
+    // TEST 9: Package inconnu retourne une liste vide
     // Objectif: Vérifier le comportement si le package n'existe pas dans la DB
     #[test]
     fn test_check_vulnerability_unknown_package() {
@@ -272,7 +463,7 @@ mod tests_vulnerability_db {
         );
     }
 
-    // TEST 7: Plusieurs vulnérabilités pour un seul package
+    // TEST 10: Plusieurs vulnérabilités pour un seul package
     // Objectif: Vérifier que check_vulnerability() retourne toutes les vulnérabilités
     #[test]
     fn test_check_vulnerability_multiple_advisories() {
@@ -286,6 +477,8 @@ mod tests_vulnerability_db {
             title: "Race condition".to_string(),
             description: "...".to_string(),
             versions: Versions {
+                introduced: Vec::new(),
+                fixed: Vec::new(),
                 patched: vec!["1.35.0".to_string()],
                 unaffected: None,
             },
@@ -298,6 +491,8 @@ mod tests_vulnerability_db {
             title: "Déni de service".to_string(),
             description: "...".to_string(),
             versions: Versions {
+                introduced: Vec::new(),
+                fixed: Vec::new(),
                 patched: vec!["1.36.0".to_string()],
                 unaffected: None,
             },
@@ -320,7 +515,7 @@ mod tests_vulnerability_db {
         assert_eq!(vulnerability[1].id, "CVE-2024-002");
     }
 
-    // TEST 8 : Validation stricte TOML - Fichier valide
+    // TEST 11 : Validation stricte TOML - Fichier valide
     #[test]
     fn test_toml_validation_valid_file() {
         let mut db = VulnerabilityDB::new();
@@ -340,12 +535,12 @@ mod tests_vulnerability_db {
 
         std::fs::write(&vuln_file, valid_toml).expect("Impossible d'écrire");
 
-        let result = db.load_from_dir(temp_dir.path());
+        let result = load_signed_fixture(&mut db, temp_dir.path(), &[&vuln_file]);
         assert!(result.is_ok(), "Un fichier TOML valide doit être accepté");
         assert_eq!(db.advisories.len(), 1, "La DB doit contenir 1 package");
     }
 
-    // TEST 9 : Validation stricte TOML - Fichier malformé (syntaxe invalide)
+    // TEST 12 : Validation stricte TOML - Fichier malformé (syntaxe invalide)
     #[test]
     fn test_toml_validation_malformed() {
         let mut db = VulnerabilityDB::new();
@@ -364,7 +559,7 @@ mod tests_vulnerability_db {
 
         std::fs::write(&vuln_file, malformed_toml).expect("Impossible d'écrire");
 
-        let result = db.load_from_dir(temp_dir.path());
+        let result = load_signed_fixture(&mut db, temp_dir.path(), &[&vuln_file]);
         // Si c'est le SEUL fichier et qu'il est invalide, doit retourner Err
         assert!(
             result.is_err(),
@@ -377,7 +572,7 @@ mod tests_vulnerability_db {
         );
     }
 
-    // TEST 10 : Validation stricte TOML - Fichier vide
+    // TEST 13 : Validation stricte TOML - Fichier vide
     #[test]
     fn test_toml_validation_empty_file() {
         let mut db = VulnerabilityDB::new();
@@ -399,7 +594,7 @@ mod tests_vulnerability_db {
         );
     }
 
-    // TEST 11 : Validation stricte TOML - Champs manquants
+    // TEST 14 : Validation stricte TOML - Champs manquants
     #[test]
     fn test_toml_validation_missing_fields() {
         let mut db = VulnerabilityDB::new();
@@ -431,7 +626,7 @@ mod tests_vulnerability_db {
         );
     }
 
-    // TEST 12 : Vérification SHA-256 - Fichier intact
+    // TEST 15 : Vérification SHA-256 - Fichier intact
     #[test]
     fn test_sha256_hash_valid_file() {
         let temp_dir = tempfile::TempDir::new().expect("Impossible de créer un répertoire");
@@ -451,7 +646,7 @@ mod tests_vulnerability_db {
         std::fs::write(&db_file, content).expect("Impossible d'écrire");
 
         let mut db = VulnerabilityDB::new();
-        let result = db.load_from_dir(temp_dir.path());
+        let result = load_signed_fixture(&mut db, temp_dir.path(), &[&db_file]);
 
         assert!(result.is_ok(), "Le chargement doit réussir");
 
@@ -480,7 +675,7 @@ mod tests_vulnerability_db {
         }
     }
 
-    // TEST 13 : Détection de modification de fichier
+    // TEST 16 : Détection de modification de fichier
     #[test]
     fn test_sha256_detect_file_modification() {
         let temp_dir = tempfile::TempDir::new().expect("Impossible de créer un répertoire");
@@ -500,8 +695,7 @@ mod tests_vulnerability_db {
         std::fs::write(&db_file, original_content).expect("Impossible d'écrire");
 
         let mut db = VulnerabilityDB::new();
-        db.load_from_dir(temp_dir.path())
-            .expect("Chargement initial");
+        load_signed_fixture(&mut db, temp_dir.path(), &[&db_file]).expect("Chargement initial");
 
         let original_hash = db.integrity_log.as_ref().unwrap().advisories[0]
             .sha256_hash
@@ -540,7 +734,7 @@ mod tests_vulnerability_db {
         );
     }
 
-    // TEST 14 : Vérification de la taille du fichier
+    // TEST 17 : Vérification de la taille du fichier
     #[test]
     fn test_database_integrity_file_size() {
         let temp_dir = tempfile::TempDir::new().expect("Impossible de créer un répertoire");
@@ -560,8 +754,7 @@ mod tests_vulnerability_db {
         std::fs::write(&db_file, content).expect("Impossible d'écrire");
 
         let mut db = VulnerabilityDB::new();
-        db.load_from_dir(temp_dir.path())
-            .expect("Chargement initial");
+        load_signed_fixture(&mut db, temp_dir.path(), &[&db_file]).expect("Chargement initial");
 
         let file_integrity = &db.integrity_log.as_ref().unwrap().advisories[0];
 
@@ -574,11 +767,12 @@ mod tests_vulnerability_db {
         );
     }
 
-    // TEST 15 : Audit complet avec plusieurs fichiers
+    // TEST 18 : Audit complet avec plusieurs fichiers
     #[test]
     fn test_database_integrity_multiple_files() {
         let temp_dir = tempfile::TempDir::new().expect("Impossible de créer un répertoire");
 
+        let mut files = Vec::new();
         // Créer 3 fichiers de vulnérabilité
         for i in 0..3 {
             let file = temp_dir.path().join(format!("vuln{}.toml", i));
@@ -596,10 +790,12 @@ mod tests_vulnerability_db {
                 i, i, i
             );
             std::fs::write(&file, content).expect("Impossible d'écrire");
+            files.push(file);
         }
 
         let mut db = VulnerabilityDB::new();
-        db.load_from_dir(temp_dir.path()).expect("Chargement");
+        let file_refs: Vec<&Path> = files.iter().map(|path| path.as_path()).collect();
+        load_signed_fixture(&mut db, temp_dir.path(), &file_refs).expect("Chargement");
 
         let audit = db.integrity_log.as_ref().expect("Audit manquant");
 
@@ -622,7 +818,7 @@ mod tests_vulnerability_db {
         }
     }
 
-    // TEST 16 : Vérification du manifeste d'intégrité
+    // TEST 19 : Vérification du manifeste d'intégrité
     #[test]
     fn test_integrity_manifest_creation() {
         let temp_dir = tempfile::TempDir::new().expect("Impossible de créer un répertoire");
@@ -642,9 +838,9 @@ mod tests_vulnerability_db {
         std::fs::write(&db_file, content).expect("Impossible d'écrire");
 
         let mut db = VulnerabilityDB::new();
-        db.load_from_dir(temp_dir.path()).expect("Chargement");
+        load_signed_fixture(&mut db, temp_dir.path(), &[&db_file]).expect("Chargement");
 
-        // Le manifeste doit avoir été créé
+        // Le manifeste signé doit avoir été fourni avec la DB
         let manifest_path = temp_dir.path().join(".integrity_manifest");
         assert!(
             manifest_path.exists(),

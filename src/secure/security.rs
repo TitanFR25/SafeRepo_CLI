@@ -47,9 +47,7 @@ struct PackageLockDep {
 // Structure pour stocker une dépendance Python parsée
 struct PythonRequirement {
     name: String,
-    version: Option<String>,
-    #[allow(dead_code)]
-    operator: Option<String>,
+    constraints: Option<String>,
 }
 
 // Structure pour stocker une dépendance Go parsée
@@ -76,10 +74,9 @@ impl GoModule {
         // Extraire la directive require/replace
         let (is_require, rest) = if let Some(idx) = trimmed.find("require ") {
             (true, &trimmed[idx + 8..].trim())
-        } else if let Some(idx) = trimmed.find("replace ") {
-            (false, &trimmed[idx + 8..].trim())
         } else {
-            return None;
+            let idx = trimmed.find("replace ")?;
+            (false, &trimmed[idx + 8..].trim())
         };
 
         if !is_require && trimmed.contains("//") {
@@ -147,21 +144,20 @@ impl PythonRequirement {
             line
         };
 
-        // Vérifier les opérateur de version
+        // Conserver toute la liste de contraintes pour ne pas perdre les bornes combinées.
         let operators = ["==", "~=", "!=", "<=", ">=", "<", ">"];
         for op in &operators {
             if let Some(pos) = line.find(op) {
-                let name = base_package.trim().to_lowercase();
-                let version = line[pos + op.len()..].trim().to_string();
-
-                // Parser la version sémantique - peut avoir plusieurs contraintes
-                // Pour la simplicité, prendre la première contrainte
-                let version_part = version.split(',').next().unwrap_or(&version).trim();
+                let name = line[..pos]
+                    .split('[')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_lowercase();
 
                 return Some(PythonRequirement {
                     name,
-                    version: Some(version_part.to_string()),
-                    operator: Some(op.to_string()),
+                    constraints: Some(line[pos..].trim().to_string()),
                 });
             }
         }
@@ -169,8 +165,7 @@ impl PythonRequirement {
         // Pas de version spécifiée
         Some(PythonRequirement {
             name: base_package.trim().to_lowercase().to_string(),
-            version: None,
-            operator: None,
+            constraints: None,
         })
     }
 }
@@ -221,11 +216,11 @@ impl ManifestParser for CargoTomlParser {
                     None
                 };
 
-                if let Some(ver) = version_opt {
-                    if let Some(version) = parse_version_candidate(&ver) {
-                        let found = db.check_vulnerability(name, &version);
-                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                    }
+                if let Some(ver) = version_opt
+                    && let Some(version) = parse_version_candidate(&ver)
+                {
+                    let found = db.check_vulnerability(name, &version);
+                    vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
                 }
             }
         }
@@ -243,11 +238,11 @@ impl ManifestParser for CargoTomlParser {
                     None
                 };
 
-                if let Some(ver) = version_opt {
-                    if let Some(version) = parse_version_candidate(&ver) {
-                        let found = db.check_vulnerability(name, &version);
-                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                    }
+                if let Some(ver) = version_opt
+                    && let Some(version) = parse_version_candidate(&ver)
+                {
+                    let found = db.check_vulnerability(name, &version);
+                    vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
                 }
             }
         }
@@ -261,6 +256,9 @@ impl ManifestParser for CargoTomlParser {
 }
 
 struct PackageLockParser;
+const MAX_NPM_DEPTH: usize = 128;
+const MAX_NPM_NODES: usize = 100_000;
+
 impl ManifestParser for PackageLockParser {
     fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>> {
         let lock_data: PackageLockJson =
@@ -315,16 +313,36 @@ impl PackageLockParser {
         db: &VulnerabilityDB,
     ) -> SafeRepoResult<Vec<Advisory>> {
         let mut vulnerabilities = Vec::new();
-        for (dep_name, dep) in deps.iter() {
-            if let Some(version_str) = &dep.version {
-                if let Ok(version) = semver::Version::parse(version_str) {
+        let mut stack = vec![(deps, 0)];
+        let mut processed_nodes: usize = 0;
+
+        while let Some((current_deps, depth)) = stack.pop() {
+            if depth > MAX_NPM_DEPTH {
+                return Err(SafeRepoError::ValidationError {
+                    file_path: "package-lock.json".to_string(),
+                    reason: format!("NPM dependency nesting exceeds {} levels", MAX_NPM_DEPTH),
+                });
+            }
+
+            processed_nodes = processed_nodes.saturating_add(current_deps.len());
+            if processed_nodes > MAX_NPM_NODES {
+                return Err(SafeRepoError::ValidationError {
+                    file_path: "package-lock.json".to_string(),
+                    reason: format!("NPM dependency count exceeds {} nodes", MAX_NPM_NODES),
+                });
+            }
+
+            for (dep_name, dep) in current_deps {
+                if let Some(version_str) = &dep.version
+                    && let Ok(version) = semver::Version::parse(version_str)
+                {
                     let found = db.check_vulnerability(dep_name, &version);
                     vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
                 }
-            }
 
-            if let Some(nested) = &dep.dependencies {
-                vulnerabilities.extend(Self::process_npm_dependencies(dep_name, nested, db)?);
+                if let Some(nested) = &dep.dependencies {
+                    stack.push((nested, depth + 1));
+                }
             }
         }
         Ok(vulnerabilities)
@@ -378,11 +396,11 @@ impl ManifestParser for PackageJsonParser {
                         None
                     };
 
-                    if let Some(ver) = version_opt {
-                        if let Some(version) = parse_version_candidate(&ver) {
-                            let found = db.check_vulnerability(name, &version);
-                            vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                        }
+                    if let Some(ver) = version_opt
+                        && let Some(version) = parse_version_candidate(&ver)
+                    {
+                        let found = db.check_vulnerability(name, &version);
+                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
                     }
                 }
                 Ok(())
@@ -413,12 +431,17 @@ impl ManifestParser for RequirementsParser {
     fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>> {
         let mut vulnerabilities = Vec::new();
         for line in content.lines() {
-            if let Some(req) = PythonRequirement::parse(line) {
-                if let Some(version_str) = &req.version {
-                    if let Some(version) = parse_python_version(version_str) {
-                        let found = db.check_vulnerability(&req.name, &version);
-                        vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                    }
+            if let Some(req) = PythonRequirement::parse(line)
+                && let Some(constraints) = req.constraints
+            {
+                if let Some(version) = exact_python_constraint(&constraints) {
+                    let found = db.check_vulnerability(&req.name, &version);
+                    vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
+                } else if python_constraint_is_supported(&constraints) {
+                    eprintln!(
+                        "À VÉRIFIER: la contrainte Python de {} ({}) ne permet pas de déterminer une version installée; aucune vulnérabilité certaine n'est déclarée",
+                        req.name, constraints
+                    );
                 }
             }
         }
@@ -430,6 +453,28 @@ impl ManifestParser for RequirementsParser {
     }
 }
 
+fn exact_python_constraint(constraints: &str) -> Option<semver::Version> {
+    let value = constraints.strip_prefix("==")?.trim();
+    if value.contains('*') || value.contains(',') {
+        return None;
+    }
+    parse_python_version(value)
+}
+
+fn python_constraint_is_supported(constraints: &str) -> bool {
+    constraints.split(',').all(|constraint| {
+        let trimmed = constraint.trim();
+        ["~=", "!=", ">=", "<=", "==", ">", "<"]
+            .iter()
+            .any(|operator| {
+                trimmed.strip_prefix(operator).is_some_and(|value| {
+                    !value.trim().is_empty()
+                        && (value.contains('*') || parse_python_version(value.trim()).is_some())
+                })
+            })
+    })
+}
+
 struct GoModParser;
 impl ManifestParser for GoModParser {
     fn parse(&self, content: &str, db: &VulnerabilityDB) -> SafeRepoResult<Vec<Advisory>> {
@@ -439,11 +484,11 @@ impl ManifestParser for GoModParser {
             if trimmed.starts_with("module ") || trimmed.starts_with("go ") {
                 continue;
             }
-            if let Some(module) = GoModule::parse(line) {
-                if let Ok(version) = semver::Version::parse(&module.version) {
-                    let found = db.check_vulnerability(&module.name, &version);
-                    vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
-                }
+            if let Some(module) = GoModule::parse(line)
+                && let Ok(version) = semver::Version::parse(&module.version)
+            {
+                let found = db.check_vulnerability(&module.name, &version);
+                vulnerabilities.extend(found.iter().map(|&adv| adv.clone()));
             }
         }
         Ok(vulnerabilities)
@@ -461,16 +506,10 @@ pub struct SecurityManager {
 
 impl SecurityManager {
     // Initialise le manager et charge la base de données locale
-    pub fn new(db_path: &str) -> Self {
+    pub fn new(db_path: &str) -> SafeRepoResult<Self> {
         let mut db = VulnerabilityDB::new();
-        if let Err(e) = db.load_from_dir(db_path) {
-            eprintln!("⚠️ [security] Erreur de chargement de la DB locale : {}", e);
-            eprintln!(
-                "💡 Assurez-vous que le répertoire {} existe avec des fichiers TOML",
-                db_path
-            );
-        }
-        Self { db }
+        db.load_from_dir(db_path)?;
+        Ok(Self { db })
     }
 
     /// Initialise le manager avec OSV.dev comme source (vraie BD en production)
@@ -496,7 +535,7 @@ impl SecurityManager {
     }
 
     fn parse_with_parser<P: ManifestParser>(
-        &mut self,
+        &self,
         file_path: &Path,
         parser: &P,
     ) -> SafeRepoResult<Vec<Advisory>> {
@@ -505,7 +544,7 @@ impl SecurityManager {
     }
 
     // Point d'entrée principal pour analyser un fichier détecté
-    pub fn analyze_file(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
+    pub fn analyze_file(&self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         // Vérifier l'extension
         let extension = file_path
             .extension()
@@ -579,13 +618,13 @@ impl SecurityManager {
     }
 
     /// Parser Cargo.toml - extraire les dépendances et vérifier les versions
-    fn process_cargo_toml(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
+    fn process_cargo_toml(&self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         self.parse_with_parser(file_path, &CargoTomlParser)
     }
 
     // Parser package-lock.json - Parser les dépendances Node.js/NPM
     // Traite les formats NPM v2 (plat) et v3+ (imbriqué)
-    fn process_package_lock(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
+    fn process_package_lock(&self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         self.parse_with_parser(file_path, &PackageLockParser)
     }
 
@@ -618,24 +657,24 @@ impl SecurityManager {
     }
 
     /// Parser Cargo.lock - retourner Result
-    fn process_cargo_lock(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
+    fn process_cargo_lock(&self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         self.parse_with_parser(file_path, &CargoLockParser)
     }
 
     /// Parser package.json - retourner Result
-    fn process_package_json(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
+    fn process_package_json(&self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         self.parse_with_parser(file_path, &PackageJsonParser)
     }
 
     /// Parser requirements.txt - Parser les dépendances Python/PIP
     /// Support de multiples formats et contraintes
-    fn process_requirements_txt(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
+    fn process_requirements_txt(&self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         self.parse_with_parser(file_path, &RequirementsParser)
     }
 
     /// Parser go.mod - Parser les dépendances Go modules
     /// Traite les directives require et replace
-    fn process_go_mod(&mut self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
+    fn process_go_mod(&self, file_path: &Path) -> SafeRepoResult<Vec<Advisory>> {
         self.parse_with_parser(file_path, &GoModParser)
     }
 

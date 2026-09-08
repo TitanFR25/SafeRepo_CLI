@@ -81,6 +81,23 @@ jobs:
       - name: Run tests (release mode)
         run: cargo test --release --verbose --all
 
+  # ====== WINDOWS TESTS JOB ======
+  windows-tests:
+    name: Windows Tests
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Run tests
+        run: cargo test --verbose --all
+
   # ====== LINTING JOB (Clippy) ======
   clippy:
     name: Clippy Linting

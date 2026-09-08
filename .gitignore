@@ -1,10 +1,73 @@
-# Mettre à jour le fichier .gitignore pour ignorer les fichiers et dossiers suivants (projet open source):
-obj
-bin
-/target
-TODO.md
-test.md
-test
-vulnera_db
-mdPrivate
+# Build artifacts
+/target/
+/bin/
+/obj/
+dist/
+build/
+out/
+*.exe
+*.dll
+*.pdb
+*.dSYM/
+*.rlib
+*.rmeta
+*.d
+
+# Operating system and tool caches
+.DS_Store
+Thumbs.db
+desktop.ini
+.history/
+.cache/
+__pycache__/
+*.py[cod]
+*.rs.bk
+node_modules/
+
+# Local editor and IDE files
+/.vscode/
+/.idea/
+*.code-workspace
+*.user
+*.suo
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
 herald.config.json
+*.local.toml
+*.private.toml
+*.secret.toml
+*.secrets.toml
+*.credentials.toml
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.ppk
+
+# Logs, temporary files and local reports
+*.log
+*.trace
+*.out
+*.err
+*.bak
+*.orig
+*.swp
+*.tmp
+*.sqlite
+*.sqlite3
+*.mdb
+*.accdb
+coverage/
+reports/
+test.md
+test/
+TODO.md
+
+# Private audit material and generated local database
+/src/mdPrivate/
+/vulnera_db/

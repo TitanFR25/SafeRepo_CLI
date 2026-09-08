@@ -1,11 +1,12 @@
+use crate::database::db::Advisory;
 use crate::secure::security::SecurityManager;
+use indicatif::{ProgressBar, ProgressStyle};
+use rayon::prelude::*;
 use std::{
     collections::HashSet,
-    fs,
-    io::{self, Write},
+    fs, io,
     path::{Path, PathBuf},
     sync::OnceLock,
-    time::{Duration, Instant},
 };
 
 // --- CONFIGURATION DE SÉCURITÉ ---
@@ -22,6 +23,7 @@ const IGNORED_DIRS: &[&str] = &[
     "dist",
     "vendor",
     ".cache",
+    "vulnera_db",
 ];
 
 // Fichiers de manifestes de projets qui peuvent contenir des informations Nécessaire à la recherche de failles de sécurité (ex: dépendances vulnérables)
@@ -63,6 +65,57 @@ pub fn is_ignored_dir(name: &str) -> bool {
     ignored_dirs_set().contains(name)
 }
 
+#[derive(Debug, Clone)]
+pub struct ScanOptions {
+    pub max_depth: usize,
+    pub max_file_size: u64,
+    pub manifest_files: HashSet<String>,
+    pub ignored_dirs: HashSet<String>,
+    pub exclude_paths: Vec<String>,
+    pub database_path: Option<PathBuf>,
+    pub threads: Option<usize>,
+}
+
+impl Default for ScanOptions {
+    fn default() -> Self {
+        Self {
+            max_depth: MAX_DEPTH,
+            max_file_size: MAX_FILE_SIZE,
+            manifest_files: MANIFEST_FILES
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+            ignored_dirs: IGNORED_DIRS
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+            exclude_paths: Vec::new(),
+            database_path: None,
+            threads: None,
+        }
+    }
+}
+
+fn is_excluded(path: &Path, root: &Path, options: &ScanOptions) -> bool {
+    if let Some(database_path) = &options.database_path
+        && (path == database_path || path.starts_with(database_path))
+    {
+        return true;
+    }
+
+    path.strip_prefix(root)
+        .ok()
+        .map(|relative| {
+            relative.components().any(|component| {
+                component
+                    .as_os_str()
+                    .to_str()
+                    .is_some_and(|name| options.exclude_paths.iter().any(|pattern| pattern == name))
+            })
+        })
+        .unwrap_or(false)
+}
+
 // 🔍 Vérifie si un répertoire est la racine valide d'un projet
 /// Retourne true si au moins un fichier de projet racine est détecté
 fn is_valid_project_root(path: &Path) -> bool {
@@ -101,10 +154,14 @@ struct ScanResult {
 
 // Fonction principale de scan sécurisé
 // P: Asref<Path> permet d'accepter des String, &str ou des PathBuf en entrée
-pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &mut SecurityManager) -> io::Result<()> {
+pub fn scan_repo<P: AsRef<Path>>(
+    root_path: P,
+    manager: &SecurityManager,
+    options: &ScanOptions,
+) -> io::Result<Vec<Advisory>> {
     // Canonicaliser le chemin (résoudre tous les .., les symlinks, etc.)
     // Cela permet de détecter les tentatives de sortie du répertoire racine
-    let canonical_root = match std::fs::canonicalize(root_path.as_ref()) {
+    let mut canonical_root = match std::fs::canonicalize(root_path.as_ref()) {
         Ok(path) => path,
         Err(e) => {
             eprintln!(
@@ -132,25 +189,26 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &mut SecurityManager) ->
 
     //Vérifier que c'est une racine de projet valide
     if !is_valid_project_root(&canonical_root) {
-        println!(
+        eprintln!(
             "⚠️ ATTENTION : '{}' n'est pas une racine de projet reconnue",
             canonical_root.display()
         );
-        println!(
+        eprintln!(
             "Fichiers marqueurs attendus : Cargo.toml, package.json, requirements.txt, go.mod, etc."
         );
 
         // Essayer de trouver automatiquement la racine
         if let Some(found_root) = find_project_root(&canonical_root) {
-            println!("✅ Racine de projet trouvée : {}", found_root.display());
-            println!("   Utilisation de ce répertoire pour le scan...");
-            stack = vec![(found_root, 0)]; // Utiliser la racine trouvée
+            eprintln!("✅ Racine de projet trouvée : {}", found_root.display());
+            eprintln!("   Utilisation de ce répertoire pour le scan...");
+            canonical_root = found_root;
+            stack = vec![(canonical_root.clone(), 0)]; // Utiliser la racine trouvée
         } else {
-            println!("❌ Aucune racine de projet trouvée. Continuation du scan malgré tout...");
+            eprintln!("❌ Aucune racine de projet trouvée. Continuation du scan malgré tout...");
             stack = vec![(canonical_root.clone(), 0)]; // Continuer avec le chemin fourni
         }
     } else {
-        println!(
+        eprintln!(
             "✅ Racine de projet détectée : {}",
             canonical_root.display()
         );
@@ -166,24 +224,26 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &mut SecurityManager) ->
         oversized_count: 0,
         depth_limit_hit: 0,
     };
+    let mut detected_vulnerabilities = Vec::new();
+    let mut manifest_paths = Vec::new();
 
-    // Liste de caractères pour créer une animation de chargement (Spinner)
-    let spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let mut frame_idx = 0; // Index pour savoir quel caractère du spinner afficher
-
-    // Gestion du temps pour l'affichage
-    let mut last_update = Instant::now(); // On stocke le moment du dernier affichage 
-    let update_interval = Duration::from_millis(100); // On veut mettre à jour l'affichage toutes les 100ms
-
-    println!("🚀 Saferepo : Démarrage du scan...");
+    let progress = ProgressBar::new_spinner();
+    progress.set_style(
+        ProgressStyle::with_template("{msg} {spinner}")
+            .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+    );
+    progress.set_message("Scan en cours");
+    progress.enable_steady_tick(std::time::Duration::from_millis(100));
 
     // 2. BOUCLE DE PARCOURS (Tant qu'il y a des dossiers dans la pile)
     while let Some((current_path, depth)) = stack.pop() {
-        // Canonicaliser aussi le chemin courant pour une sécurité supplémentaire
-        let safe_path = match std::fs::canonicalize(&current_path) {
-            Ok(p) => p,
-            Err(_) => continue, // Ignorer les chemins invalides
-        };
+        // Les chemins sont canonicalisés avant leur empilement.
+        let safe_path = &current_path;
+
+        if is_excluded(safe_path, &canonical_root, options) {
+            stats.ignored_count += 1;
+            continue;
+        }
 
         // ⚠️ S'assurer qu'on ne sort pas du répertoire racine
         if !safe_path.starts_with(&canonical_root) {
@@ -193,7 +253,7 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &mut SecurityManager) ->
             continue; // Rejeter le chemin
         }
         // On arrete si c'est trop profond pour éviter les attaques DoS
-        if depth > MAX_DEPTH {
+        if depth > options.max_depth {
             stats.depth_limit_hit += 1;
             continue;
         }
@@ -224,10 +284,10 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &mut SecurityManager) ->
 
             // --- LOGIQUE DE FILTRAGE ---
             // 1. Si c'est un fichier manifeste on accepte
-            let is_manifest = is_manifest_file(name_str.as_ref());
+            let is_manifest = options.manifest_files.contains(name_str.as_ref());
 
             // 2. Si ce n'est pas un manifeste et que c'est dans la liste IGNORED on passe
-            if !is_manifest && is_ignored_dir(name_str.as_ref()) {
+            if !is_manifest && options.ignored_dirs.contains(name_str.as_ref()) {
                 stats.ignored_count += 1;
                 continue;
             }
@@ -240,13 +300,21 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &mut SecurityManager) ->
             // CAS 1 : C'est un dossier
             if meta.is_dir() {
                 stats.dirs_count += 1;
-                // On ajoute le chemin du dossier dans la pile pour qu'il soit scanné plus tard
-                stack.push((entry.path(), depth + 1));
+                // Canonicaliser une seule fois avant l'empilement du dossier.
+                let child_path = match fs::canonicalize(entry.path()) {
+                    Ok(path) => path,
+                    Err(_) => continue,
+                };
+                if !child_path.starts_with(&canonical_root) {
+                    eprintln!("🚨 ALERTE SÉCURITÉ : Tentative de path traversal détectée !");
+                    continue;
+                }
+                stack.push((child_path, depth + 1));
             }
             // CAS 2 : C'est un fichier
             else if meta.is_file() {
                 // Limite de taille pour ne pas saturer la RAM
-                if meta.len() > MAX_FILE_SIZE {
+                if meta.len() > options.max_file_size {
                     stats.oversized_count += 1;
                     continue;
                 }
@@ -254,75 +322,107 @@ pub fn scan_repo<P: AsRef<Path>>(root_path: P, manager: &mut SecurityManager) ->
                 // On ne délègue au manager que si c'est un fichier qu'il connait
                 if is_manifest {
                     stats.files_count += 1;
-                    match manager.analyze_file(&entry.path()) {
-                        Ok(vulns) => stats.issues_found += vulns.len() as u64,
-                        Err(e) => eprintln!("✅ Analyse fichier: {}", e),
-                    }
+                    manifest_paths.push(entry.path());
                 }
 
-                // --- GESTION DE L'AFFICHAGE DYNAMIQUE (UX) ---
-                // S'affiche uniquement si supérieur ou égal à 100ms
-                if last_update.elapsed() >= update_interval {
-                    frame_idx = (frame_idx + 1) % spinner_frames.len();
-
-                    // On affiche l'état actuel sur une seule ligne
-                    print!(
-                        "\r{} Scan en cours... [{} manifeste analysés]",
-                        spinner_frames[frame_idx], stats.files_count
-                    );
-                    // Force l'affichage immédiat dans le terminal
-                    io::stdout().flush()?;
-
-                    // On réinitialise le chrono pour le prochain intervalle
-                    last_update = Instant::now();
-                }
+                progress.set_message(format!(
+                    "{} manifeste(s), {} dossier(s) parcouru(s)",
+                    stats.files_count, stats.dirs_count
+                ));
             }
         }
     }
 
+    progress.set_message(format!(
+        "analyse de {} manifeste(s) en cours",
+        stats.files_count
+    ));
+
+    let thread_pool = match options.threads {
+        Some(0) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Le nombre de threads doit être supérieur à zéro",
+            ));
+        }
+        Some(thread_count) => rayon::ThreadPoolBuilder::new()
+            .num_threads(thread_count)
+            .build()
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?,
+        None => rayon::ThreadPoolBuilder::new()
+            .build()
+            .map_err(|error| io::Error::other(error.to_string()))?,
+    };
+
+    let analysis_results = thread_pool.install(|| {
+        manifest_paths
+            .par_iter()
+            .map(|path| {
+                manager
+                    .analyze_file(path)
+                    .map_err(|error| error.to_string())
+            })
+            .collect::<Vec<_>>()
+    });
+
+    for result in analysis_results {
+        match result {
+            Ok(vulns) => {
+                stats.issues_found += vulns.len() as u64;
+                detected_vulnerabilities.extend(vulns);
+            }
+            Err(error) => eprintln!("⚠️ Analyse du manifeste impossible: {}", error),
+        }
+    }
+
+    progress.finish_with_message(format!(
+        "scan terminé : {} manifeste(s), {} dossier(s)",
+        stats.files_count, stats.dirs_count
+    ));
+
     // 4. FINALISATION ET RAPPORT EXACT
     // On efface la ligne du spinner pour un affichage propre
-    print!("\r{: <60}\r", "");
+    eprint!("\r{: <60}\r", "");
 
-    println!("✅ Scan terminé avec succès.");
-    println!("📊 Statistiques du projet :");
-    println!("   - Manifestes analysés : {}", stats.files_count);
-    println!("   - Répertoires parcourus : {}", stats.dirs_count);
+    eprintln!("✅ Scan terminé avec succès.");
+    eprintln!("📊 Statistiques du projet :");
+    eprintln!("   - Manifestes analysés : {}", stats.files_count);
+    eprintln!("   - Répertoires parcourus : {}", stats.dirs_count);
 
     // Section des éléments ignorés (affichée uniquement si nécessaire)
     if stats.ignored_count > 0 || stats.depth_limit_hit > 0 || stats.oversized_count > 0 {
-        println!("\nℹ️  Informations sur le filtrage :");
+        eprintln!("\nℹ️  Informations sur le filtrage :");
 
         // Affiche le nombre de dossiers exclus
         if stats.ignored_count > 0 {
-            println!("   - Dossiers exclus par défaut : {}", stats.ignored_count);
+            eprintln!("   - Dossiers exclus par défaut : {}", stats.ignored_count);
         }
 
         // Affiche si la limite de profondeur (40) a été atteinte
         if stats.depth_limit_hit > 0 {
-            println!(
+            eprintln!(
                 "   - Dossiers trop profonds (> {} niveaux) : {}",
-                MAX_DEPTH, stats.depth_limit_hit
+                options.max_depth, stats.depth_limit_hit
             );
         }
 
         // Affiche si des fichiers étaient trop gros pour être lus en toute sécurité
         if stats.oversized_count > 0 {
-            println!(
+            eprintln!(
                 "   - Fichiers ignorés car trop volumineux (> 2 Mo) : {}",
                 stats.oversized_count
             );
         }
     }
 
-    println!("\n--- RÉSULTAT DE SÉCURITÉ ---");
+    eprintln!("\n--- RÉSULTAT DE SÉCURITÉ ---");
     if stats.issues_found > 0 {
-        println!(
+        eprintln!(
             "🚨 DANGER : {} vulnérabilité(s) détectée(s) dans vos dépendances !",
             stats.issues_found
         );
     } else {
-        println!("🛡️  Félicitations : Aucune vulnérabilité connue détectée.");
+        eprintln!("🛡️  Félicitations : Aucune vulnérabilité connue détectée.");
     }
-    Ok(())
+    Ok(detected_vulnerabilities)
 }

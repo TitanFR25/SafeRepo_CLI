@@ -4,10 +4,10 @@ mod test_security_manager {
     use SafeRepo_CLI::database::db::{Advisory, Severity, Versions, VulnerabilityDB};
     use SafeRepo_CLI::secure::security::SecurityManager;
 
-    // TEST 1: Création d'un SecurityManager avec une DB valide
-    // Objectif: Vérifier qu'un SecurityManager peut être créé et chargé
+    // TEST 1: Une DB locale non signée est refusée
+    // Objectif: Vérifier que le chargement respecte la signature Ed25519 obligatoire
     #[test]
-    fn test_security_manager_new() {
+    fn test_security_manager_new_rejects_unsigned_database() {
         // Créer un répertoire temporaire avec un fichier de vulnérabilité
         let temp_dir =
             tempfile::TempDir::new().expect("Impossible de créer un répertoire temporaire");
@@ -26,14 +26,11 @@ mod test_security_manager {
 
         std::fs::write(&vuln_file, toml_content).expect("Impossible d'écrire le fichier");
 
-        // Créer un SecurityManager pointant vers ce répertoire
-        let manager = SecurityManager::new(temp_dir.path().to_str().expect("Chemin invalide"));
+        let result = SecurityManager::new(temp_dir.path().to_str().expect("Chemin invalide"));
 
-        // Le manager doit être créé sans erreur
-        // (On ne peut pas vraiment vérifier l'état interne, mais on s'assure que le constructeur ne panic pas)
         assert!(
-            !manager.db.advisories.is_empty(),
-            "La DB ne devrait pas être vide"
+            result.is_err(),
+            "Une DB sans manifeste signé doit être refusée"
         );
     }
 
@@ -50,13 +47,15 @@ mod test_security_manager {
             title: "Vulnérabilité de sévérité élevée".to_string(),
             description: "Description test".to_string(),
             versions: Versions {
+                introduced: Vec::new(),
+                fixed: Vec::new(),
                 patched: vec!["0.4.20".to_string()],
                 unaffected: None,
             },
         };
         db.advisories.insert("log".to_string(), vec![advisory]);
 
-        let mut manager = SecurityManager { db };
+        let manager = SecurityManager { db };
 
         // Créer un répertoire temporaire avec un vrai fichier Cargo.lock
         let temp_dir =
@@ -94,7 +93,7 @@ mod test_security_manager {
     fn test_analyze_cargo_no_vulnera() {
         // Créer une base de données vide (aucune vulnérabilité connue)
         let db = VulnerabilityDB::new();
-        let mut manager = SecurityManager { db };
+        let manager = SecurityManager { db };
 
         // Créer un répertoire temporaire avec un vrai fichier Cargo.lock
         let temp_dir =
@@ -130,7 +129,7 @@ mod test_security_manager {
     #[test]
     fn test_analyze_cargo_lock_invalid_toml() {
         let db = VulnerabilityDB::new();
-        let mut manager = SecurityManager { db };
+        let manager = SecurityManager { db };
 
         // Créer un répertoire temporaire avec un fichier Cargo.lock invalide
         let temp_dir =
@@ -145,17 +144,9 @@ mod test_security_manager {
         std::fs::write(&cargo_lock_path, invalid_toml)
             .expect("Impossible d'écrire dans le fichier");
 
-        // Analyser le fichier (ne doit pas planter)
-        let issues_count = manager
-            .analyze_file(&cargo_lock_path)
-            .unwrap_or_default()
-            .len();
+        let result = manager.analyze_file(&cargo_lock_path);
 
-        // Doit retourner 0 sans paniquer
-        assert_eq!(
-            issues_count, 0,
-            "Un Cargo.lock invalide doit retourner 0, pas paniquer"
-        );
+        assert!(result.is_err(), "Un Cargo.lock invalide doit être refusé");
     }
 
     // TEST 5: Analyse d'un fichier avec extension inconnue
@@ -163,7 +154,7 @@ mod test_security_manager {
     #[test]
     fn test_analyze_unknown_file_type() {
         let db = VulnerabilityDB::new();
-        let mut manager = SecurityManager { db };
+        let manager = SecurityManager { db };
 
         // Créer un répertoire temporaire avec un fichier non reconnu
         let temp_dir =
@@ -172,13 +163,11 @@ mod test_security_manager {
         std::fs::write(&txt_file, b"Ceci n'est pas un fichier manifeste")
             .expect("Impossible d'écrire");
 
-        // ACT: Analyser ce fichier
-        let issues_count = manager.analyze_file(&txt_file).unwrap_or_default().len();
+        let result = manager.analyze_file(&txt_file);
 
-        // ASSERT: Doit retourner 0 (fichier non reconnu)
-        assert_eq!(
-            issues_count, 0,
-            "Un fichier avec une extension inconnue doit retourner 0 vulnérabilités"
+        assert!(
+            result.is_err(),
+            "Un fichier avec une extension inconnue doit être refusé"
         );
     }
 
@@ -187,7 +176,7 @@ mod test_security_manager {
     #[test]
     fn test_analyze_cargo_lock_invalid_version() {
         let db = VulnerabilityDB::new();
-        let mut manager = SecurityManager { db };
+        let manager = SecurityManager { db };
 
         // Créer un répertoire temporaire avec un fichier Cargo.lock invalide
         let temp_dir =
@@ -201,10 +190,9 @@ version = "not.a.valid.version""#;
         std::fs::write(&cargo_lock_path, cargo_content)
             .expect("Impossible d'écrire dans le fichier");
 
-        // Analyser le fichier (ne doit pas planter)
         let issues_count = manager
             .analyze_file(&cargo_lock_path)
-            .unwrap_or_default()
+            .expect("Une version invalide doit être ignorée sans échec de parsing")
             .len();
 
         // Doit retourner 0 sans lever d'exception
@@ -217,6 +205,7 @@ version = "not.a.valid.version""#;
 
 #[cfg(test)]
 mod test_multi_parsers {
+    use SafeRepo_CLI::database::db::{Advisory, Severity, Versions, VulnerabilityDB};
     use SafeRepo_CLI::secure::security::SecurityManager;
     use std::fs;
     use tempfile::TempDir;
@@ -245,7 +234,9 @@ mod test_multi_parsers {
 
         fs::write(&package_lock, content).expect("écrire");
 
-        let mut manager = SecurityManager::new("vulnera_db");
+        let manager = SecurityManager {
+            db: VulnerabilityDB::new(),
+        };
         let result = manager.analyze_file(&package_lock);
 
         match &result {
@@ -269,7 +260,9 @@ mod test_multi_parsers {
 
         fs::write(&requirements, content).expect("écrire");
 
-        let mut manager = SecurityManager::new("vulnera_db");
+        let manager = SecurityManager {
+            db: VulnerabilityDB::new(),
+        };
         let result = manager.analyze_file(&requirements);
 
         assert!(result.is_ok(), "Doit parser requirements.txt valide");
@@ -292,7 +285,9 @@ require (
 
         fs::write(&go_mod, content).expect("écrire");
 
-        let mut manager = SecurityManager::new("vulnera_db");
+        let manager = SecurityManager {
+            db: VulnerabilityDB::new(),
+        };
         let result = manager.analyze_file(&go_mod);
 
         match &result {
@@ -324,7 +319,9 @@ require (
 
         fs::write(&package_json, content).expect("écrire package.json");
 
-        let mut manager = SecurityManager::new("vulnera_db");
+        let manager = SecurityManager {
+            db: VulnerabilityDB::new(),
+        };
         let result = manager.analyze_file(&package_json);
 
         assert!(result.is_ok(), "Doit parser package.json valide");
@@ -347,18 +344,156 @@ require (
 
         fs::write(&package_json, content).expect("écrire package.json");
 
-        let mut manager = SecurityManager::new("vulnera_db");
+        let manager = SecurityManager {
+            db: VulnerabilityDB::new(),
+        };
         let result = manager.analyze_file(&package_json);
 
         assert!(
             result.is_ok(),
             "Le parser doit gérer les versions invalides sans panic"
         );
-        let issues = result.unwrap_or_default();
+        let issues = result.expect("Une version NPM invalide doit être ignorée sans erreur");
         assert_eq!(
             issues.len(),
             0,
             "Aucune vulnérabilité attendue pour version invalide"
+        );
+    }
+
+    // TEST 6: Contraintes Python non épinglées
+    // Objectif: Vérifier que seules les versions exactes sont analysées
+    #[test]
+    fn test_parse_requirements_only_exact_versions() {
+        // Créer un fichier Python contenant une version exacte et une contrainte ouverte.
+        let temp_dir = TempDir::new().expect("répertoire temp");
+        let requirements = temp_dir.path().join("requirements.txt");
+        let content = "requests==1.0.0\nrequests>=1.0.0,<2.0.0\n";
+        fs::write(&requirements, content).expect("écrire");
+
+        // Charger un advisory et analyser le fichier requirements.txt.
+        let mut db = VulnerabilityDB::new();
+        db.advisories.insert(
+            "requests".to_string(),
+            vec![Advisory {
+                id: "TEST-REQ-001".to_string(),
+                package: "requests".to_string(),
+                severity: Severity::High,
+                title: "Test".to_string(),
+                description: "Test".to_string(),
+                versions: Versions {
+                    introduced: Vec::new(),
+                    fixed: Vec::new(),
+                    patched: vec!["2.0.0".to_string()],
+                    unaffected: None,
+                },
+            }],
+        );
+        let manager = SecurityManager { db };
+
+        let vulnerabilities = manager
+            .analyze_file(&requirements)
+            .expect("Doit parser requirements.txt");
+
+        // Seule la dépendance avec une version exacte doit être détectée.
+        assert_eq!(
+            vulnerabilities.len(),
+            1,
+            "Seule la contrainte exacte doit être analysée"
+        );
+    }
+
+    // TEST 7: Contraintes Python ouvertes conservées comme indéterminées
+    // Objectif: Vérifier qu'une contrainte non exacte ne devient pas une détection certaine
+    #[test]
+    fn test_parse_requirements_keeps_open_constraints_indeterminate() {
+        // Préparer uniquement des contraintes Python ouvertes ou exclues.
+        let temp_dir = TempDir::new().expect("répertoire temp");
+        let requirements = temp_dir.path().join("requirements.txt");
+        fs::write(
+            &requirements,
+            "requests>=1.0.0,<2.0.0\nrequests~=1.0.0\nrequests!=1.5.0\n",
+        )
+        .expect("écrire");
+
+        // Charger une plage vulnérable pour vérifier qu'elle ne force pas une détection.
+        let mut db = VulnerabilityDB::new();
+        db.advisories.insert(
+            "requests".to_string(),
+            vec![Advisory {
+                id: "TEST-REQ-RANGE-001".to_string(),
+                package: "requests".to_string(),
+                severity: Severity::High,
+                title: "Test".to_string(),
+                description: "Test".to_string(),
+                versions: Versions {
+                    introduced: vec!["1.0.0".to_string()],
+                    fixed: vec!["2.0.0".to_string()],
+                    patched: Vec::new(),
+                    unaffected: None,
+                },
+            }],
+        );
+
+        let manager = SecurityManager { db };
+        let vulnerabilities = manager
+            .analyze_file(&requirements)
+            .expect("Doit parser les contraintes Python");
+
+        // Une contrainte ouverte doit rester indéterminée.
+        assert!(
+            vulnerabilities.is_empty(),
+            "Une contrainte ouverte ne doit pas devenir une détection certaine"
+        );
+    }
+
+    // TEST 8: Suffixe extra dans une dépendance Python
+    // Objectif: Vérifier que le parsing d'un nom avec extra ne provoque pas de panic
+    #[test]
+    fn test_parse_requirements_with_extra_does_not_panic() {
+        // Analyser une dépendance Python avec un extra entre crochets.
+        let temp_dir = TempDir::new().expect("répertoire temp");
+        let requirements = temp_dir.path().join("requirements.txt");
+        fs::write(&requirements, "requests[security]==1.0.0\n").expect("écrire");
+
+        // Le parser doit terminer proprement, même sans vulnérabilité connue.
+        let manager = SecurityManager {
+            db: VulnerabilityDB::new(),
+        };
+        assert!(manager.analyze_file(&requirements).is_ok());
+    }
+
+    // TEST 9: Profondeur excessive d'un package-lock.json
+    // Objectif: Vérifier qu'une imbrication NPM excessive est refusée sans panic
+    #[test]
+    fn test_parse_package_lock_rejects_excessive_nesting() {
+        // Construire progressivement un JSON dont la profondeur dépasse la limite autorisée.
+        let temp_dir = TempDir::new().expect("répertoire temp");
+        let package_lock = temp_dir.path().join("package-lock.json");
+
+        let depth = 129;
+        let mut content = String::from("{\"dependencies\":");
+        for index in 0..depth {
+            content.push_str(&format!(
+                "{{\"package-{index}\":{{\"version\":\"1.0.0\",\"dependencies\":"
+            ));
+        }
+        content.push_str("{}");
+        for _ in 0..depth {
+            content.push_str("}}");
+        }
+        content.push('}');
+
+        fs::write(&package_lock, content).expect("écrire package-lock.json");
+
+        let manager = SecurityManager {
+            db: VulnerabilityDB::new(),
+        };
+        let result = manager.analyze_file(&package_lock);
+
+        assert!(
+            result.is_err(),
+            "Une imbrication NPM excessive doit être refusée"
         );
     }
 }
